@@ -3,13 +3,28 @@ import math
 import re
 import shutil
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import docx
 from docx.shared import Mm
 import openpyxl
 from docxtpl import DocxTemplate, InlineImage, Listing
 from pypdf import PdfReader
+
+from app_paths import resolve_data_file, resolve_paths
+
+
+@contextmanager
+def prepared_template(template_path: Path):
+    """Исправляет только временную копию; имя важно для распознавания шаблона 3."""
+    with TemporaryDirectory(prefix="automat-docs-template-") as temp_dir:
+        copy_path = Path(temp_dir) / template_path.name
+        # copyfile не наследует атрибут «только чтение» установленных ресурсов.
+        shutil.copyfile(template_path, copy_path)
+        fix_docxtpl_tags_in_docx(copy_path)
+        yield copy_path
 
 
 def sanitize_folder_name(name: str) -> str:
@@ -126,11 +141,15 @@ def get_exact_docx_page_count(docx_path: Path, fallback_text: str = "") -> int:
             if pages > 0:
                 return pages
         finally:
-            if doc is not None:
-                doc.Close(False)
-            if word is not None:
-                word.Quit()
-            pythoncom.CoUninitialize()
+            try:
+                if doc is not None:
+                    doc.Close(False)
+            finally:
+                try:
+                    if word is not None:
+                        word.Quit()
+                finally:
+                    pythoncom.CoUninitialize()
     except Exception:
         pass
 
@@ -143,14 +162,20 @@ def convert_folder_docx_to_pdf_via_word(folder_path: Path):
     Корректно работает внутри QThread и в скомпилированном .exe (--noconsole),
     сохраняя все вставленные .png подписи авторов.
     """
-    import pythoncom
-    import win32com.client
-
     docx_files = sorted(
         p for p in folder_path.glob("*.docx") if not p.name.startswith("~$")
     )
     if not docx_files:
         return
+
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise RuntimeError(
+            "Экспорт PDF требует Windows, установленного Microsoft Word и pywin32. "
+            "Установите зависимости из requirements.txt или отключите PDF. DOCX уже сохранены."
+        ) from exc
 
     pythoncom.CoInitialize()
     word = None
@@ -180,10 +205,18 @@ def convert_folder_docx_to_pdf_via_word(folder_path: Path):
             finally:
                 if doc is not None:
                     doc.Close(False)
+    except Exception as exc:
+        raise RuntimeError(
+            "Не удалось экспортировать PDF через Microsoft Word. Проверьте, что Word "
+            "установлен и запускается под текущим пользователем. DOCX уже сохранены. "
+            f"Подробности: {exc}"
+        ) from exc
     finally:
-        if word is not None:
-            word.Quit()
-        pythoncom.CoUninitialize()
+        try:
+            if word is not None:
+                word.Quit()
+        finally:
+            pythoncom.CoUninitialize()
 
 
 def extract_text_from_docx(docx_path: Path) -> str:
@@ -338,22 +371,27 @@ def resolve_template_path(templates_dir: Path, primary_name: str, fallback_name:
 
 
 def attach_signature_images_for_doc(
-    doc: DocxTemplate, authors: list[dict], main_author: dict
+    doc: DocxTemplate, authors: list[dict], main_author: dict,
+    data_dir: Path | None = None,
 ) -> tuple[list[dict], dict]:
+    def signature_path(value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else resolve_data_file(value, data_dir or resolve_paths().data_dir)
+
     prepared_authors = []
     for a in authors:
         a_copy = dict(a)
         png_path = a_copy.get("signature_png", "")
-        if png_path and Path(png_path).exists():
-            a_copy["signature_img"] = InlineImage(doc, str(Path(png_path).resolve()), height=Mm(12))
+        if png_path and signature_path(png_path).exists():
+            a_copy["signature_img"] = InlineImage(doc, str(signature_path(png_path)), height=Mm(12))
         else:
             a_copy["signature_img"] = ""
         prepared_authors.append(a_copy)
 
     main_copy = dict(main_author)
     main_png = main_copy.get("signature_png", "")
-    if main_png and Path(main_png).exists():
-        main_copy["signature_img"] = InlineImage(doc, str(Path(main_png).resolve()), height=Mm(12))
+    if main_png and signature_path(main_png).exists():
+        main_copy["signature_img"] = InlineImage(doc, str(signature_path(main_png)), height=Mm(12))
     else:
         main_copy["signature_img"] = ""
 
@@ -369,6 +407,7 @@ def generate_module_documents(
     output_base_dir: Path,
     sign_date: str = "03.11.2026г.",
     convert_pdf: bool = False,
+    data_dir: Path | None = None,
 ) -> Path:
     program_name = module_info["program_name"].strip()
     creation_year = str(module_info.get("creation_year", "2026")).strip()
@@ -386,14 +425,14 @@ def generate_module_documents(
     if not tpl_listing_path.exists():
         raise FileNotFoundError(f"Не найден файл шаблона: {tpl_listing_path}")
 
-    fix_docxtpl_tags_in_docx(tpl_listing_path)
-    doc_listing = DocxTemplate(str(tpl_listing_path))
-    doc_listing.render({
-        "program_name": program_name,
-        "listing_text": Listing(listing_text) if listing_text else "",
-    })
     out_listing_path = module_out_dir / "6. Листинг.docx"
-    doc_listing.save(str(out_listing_path))
+    with prepared_template(tpl_listing_path) as prepared_path:
+        doc_listing = DocxTemplate(str(prepared_path))
+        doc_listing.render({
+            "program_name": program_name,
+            "listing_text": Listing(listing_text) if listing_text else "",
+        })
+        doc_listing.save(str(out_listing_path))
 
     if listing_text and listing_text.strip():
         listing_pages = get_exact_docx_page_count(out_listing_path, listing_text)
@@ -415,29 +454,28 @@ def generate_module_documents(
         if not tpl_path.exists():
             raise FileNotFoundError(f"Не найден файл шаблона: {tpl_path}")
 
-        fix_docxtpl_tags_in_docx(tpl_path)
+        with prepared_template(tpl_path) as prepared_path:
+            doc = DocxTemplate(str(prepared_path))
+            authors_with_sig, main_with_sig = attach_signature_images_for_doc(
+                doc, selected_authors, main_author, data_dir=data_dir
+            )
 
-        doc = DocxTemplate(str(tpl_path))
-        authors_with_sig, main_with_sig = attach_signature_images_for_doc(
-            doc, selected_authors, main_author
-        )
+            context = {
+                "program_name": program_name,
+                "creation_year": creation_year,
+                "authors_count": len(selected_authors),
+                "main_author": main_with_sig,
+                "authors": authors_with_sig,
+                "listing_pages": counts["listing_pages"],
+                "addendum_pages": counts["addendum_pages"],
+                "consent_pd_pages": counts["consent_pd_pages"],
+                "consent_info_pages": counts["consent_info_pages"],
+                "sign_date": sign_date,
+            }
 
-        context = {
-            "program_name": program_name,
-            "creation_year": creation_year,
-            "authors_count": len(selected_authors),
-            "main_author": main_with_sig,
-            "authors": authors_with_sig,
-            "listing_pages": counts["listing_pages"],
-            "addendum_pages": counts["addendum_pages"],
-            "consent_pd_pages": counts["consent_pd_pages"],
-            "consent_info_pages": counts["consent_info_pages"],
-            "sign_date": sign_date,
-        }
-
-        doc.render(context)
-        out_path = module_out_dir / out_filename
-        doc.save(str(out_path))
+            doc.render(context)
+            out_path = module_out_dir / out_filename
+            doc.save(str(out_path))
 
     # ШАГ 3: Конвертация всех созданных .docx в .pdf (включая подписи) через MS Word
     if convert_pdf:

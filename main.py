@@ -1,10 +1,12 @@
 # main.py
+import argparse
 import os
 import re
 import sys
 from pathlib import Path
+from copy import deepcopy
 
-from PyQt6.QtCore import QDate, QThread, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QDate, QThread, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +31,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -37,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 from db import AuthorDB
+from app_paths import AppPaths, AmbiguousDatabaseError, absolute_path, resolve_paths
 from generator import (
     generate_module_documents,
     import_modules_from_excel,
@@ -141,6 +145,20 @@ QTableWidget, QListWidget {
     gridline-color: #E2E8F0;
     selection-background-color: #DBEAFE;
     selection-color: #1E3A8A;
+}
+QListWidget#Navigation {
+    border: none;
+    border-right: 1px solid #E2E8F0;
+}
+QListWidget#Navigation::item {
+    padding: 12px 8px;
+    margin: 8px 4px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+QListWidget#Navigation::item:selected {
+    background-color: #DBEAFE;
+    color: #1E3A8A;
 }
 QHeaderView::section {
     background-color: #F1F5F9;
@@ -271,6 +289,7 @@ class GenerationWorker(QThread):
     progress = pyqtSignal(int, str)
     finished_ok = pyqtSignal(int, str)
     failed = pyqtSignal(str)
+    module_completed = pyqtSignal(int, int)  # Строка таблицы и пересчитанные страницы.
 
     def __init__(
         self,
@@ -281,7 +300,7 @@ class GenerationWorker(QThread):
         convert_pdf: bool,
     ):
         super().__init__()
-        self.tasks = tasks
+        self.tasks = deepcopy(tasks)
         self.templates_dir = templates_dir
         self.output_dir = output_dir
         self.sign_date = sign_date
@@ -296,31 +315,38 @@ class GenerationWorker(QThread):
                     int((idx - 1) / total * 100),
                     f"Обработка ({idx}/{total}): «{prog_name}»...",
                 )
-                generate_module_documents(
-                    index=idx,
-                    module_info=task["module"],
-                    selected_authors=task["authors"],
-                    main_author=task["main_author"],
-                    templates_dir=self.templates_dir,
-                    output_base_dir=self.output_dir,
-                    sign_date=self.sign_date,
-                    convert_pdf=self.convert_pdf,
-                )
+                try:
+                    generate_module_documents(
+                        index=idx,
+                        module_info=task["module"],
+                        selected_authors=task["authors"],
+                        main_author=task["main_author"],
+                        templates_dir=self.templates_dir,
+                        output_base_dir=self.output_dir,
+                        sign_date=self.sign_date,
+                        convert_pdf=self.convert_pdf,
+                    )
+                finally:
+                    # Страницы сохраняются и при последующей ошибке экспорта PDF.
+                    self.module_completed.emit(idx - 1, int(task["module"]["listing_pages"]))
             self.progress.emit(100, "Генерация всех пакетов документов успешно завершена!")
             self.finished_ok.emit(total, str(self.output_dir.resolve()))
         except Exception as e:
             self.failed.emit(str(e))
 
 
-class AutomatDocsWindow(QMainWindow):
-    def __init__(self, icon_path: Path):
-        super().__init__()
-        self.setWindowTitle("Automat docs — Автоматизация документов для регистрации программ ЭВМ")
-        self.resize(1380, 850)
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+class DocumentsWidget(QWidget):
+    generation_stopped = pyqtSignal()
 
-        self.db = AuthorDB()
+    def __init__(self, paths: AppPaths, parent=None):
+        super().__init__(parent)
+        self.paths = paths
+        self.worker: GenerationWorker | None = None
+        self.suppress_notifications = False
+        self._generation_outcome = None
+        self._generation_controls = []
+
+        self.db = AuthorDB(paths.db_path, data_dir=paths.data_dir)
         self.authors_cache: list[dict] = []
         self.modules_data: list[dict] = []
         self.selected_author_id_for_edit: int | None = None
@@ -332,27 +358,30 @@ class AutomatDocsWindow(QMainWindow):
         self._refresh_authors_ui()
 
     def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(16, 12, 16, 12)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(8, 12, 16, 12)
         root_layout.setSpacing(10)
 
         banner = QFrame()
         banner.setObjectName("HeaderBanner")
         banner_layout = QHBoxLayout(banner)
         title_box = QVBoxLayout()
-        lbl_title = QLabel("Automat docs")
+        lbl_title = QLabel("Документы")
         lbl_title.setObjectName("HeaderTitle")
         lbl_sub = QLabel(
-            "Локальная офлайн-система подготовки комплектов документов Роспатента (Заявление, Дополнение, Согласия, Ходатайство, Листинг)"
+            "Подготовка комплектов документов для регистрации программ ЭВМ"
         )
         lbl_sub.setObjectName("HeaderSubtitle")
         title_box.addWidget(lbl_title)
         title_box.addWidget(lbl_sub)
         banner_layout.addLayout(title_box)
-        banner_layout.addStretch()
         root_layout.addWidget(banner)
+
+        data_label = QLabel(f"База авторов: {self.paths.db_path}")
+        data_label.setTextFormat(Qt.TextFormat.PlainText)
+        data_label.setWordWrap(True)
+        data_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        root_layout.addWidget(data_label)
 
         self.tabs = QTabWidget()
         self.tab_authors = QWidget()
@@ -555,7 +584,7 @@ class AutomatDocsWindow(QMainWindow):
         btn_pick_pfx = QPushButton("🔐 Добавить ЭЦП (.pfx)")
         btn_pick_pfx.setObjectName("SecondaryBtn")
         btn_pick_pfx.setToolTip(
-            "Выберите файл сертификата электронной подписи (.pfx) для сохранения в папке программы"
+            "Сохраняет PFX в карточке автора. Электронное подписание документов не выполняется."
         )
         btn_pick_pfx.clicked.connect(self._pick_signature_pfx)
         btn_clear_pfx = QPushButton("✖")
@@ -680,12 +709,12 @@ class AutomatDocsWindow(QMainWindow):
         gen_group = QGroupBox("Шаг 3. Генерация пакетов документов")
         gen_grid = QGridLayout(gen_group)
 
-        self.inp_templates_dir = QLineEdit(str(Path("templates").resolve()))
+        self.inp_templates_dir = QLineEdit(str(self.paths.templates_dir))
         btn_browse_tpl = QPushButton("Обзор...")
         btn_browse_tpl.setObjectName("SecondaryBtn")
         btn_browse_tpl.clicked.connect(self._browse_templates_dir)
 
-        self.inp_output_dir = QLineEdit(str(Path("output").resolve()))
+        self.inp_output_dir = QLineEdit(str(self.paths.output_dir))
         btn_browse_out = QPushButton("Обзор...")
         btn_browse_out.setObjectName("SecondaryBtn")
         btn_browse_out.clicked.connect(self._browse_output_dir)
@@ -734,6 +763,11 @@ class AutomatDocsWindow(QMainWindow):
         gen_grid.addWidget(self.lbl_status, 4, 0, 1, 3)
 
         vbox.addWidget(gen_group)
+        self._generation_controls = [
+            self.tab_authors, toolbar_group, mod_group, auth_sel_group,
+            self.inp_templates_dir, btn_browse_tpl, self.inp_output_dir,
+            btn_browse_out, options_row, self.btn_generate,
+        ]
 
     # --------------------------------------------------------------------------
     # Вспомогательные обработчики ввода и подписей
@@ -806,8 +840,8 @@ class AutomatDocsWindow(QMainWindow):
         self.tbl_authors.setRowCount(len(self.authors_cache))
         for r_idx, a in enumerate(self.authors_cache):
             dob_str = f"{a['birth_day']}.{a['birth_month']}.{a['birth_year']}"
-            has_png = bool(a.get("signature_png") and Path(a["signature_png"]).exists())
-            has_pfx = bool(a.get("signature_pfx") and Path(a["signature_pfx"]).exists())
+            has_png = bool(a.get("signature_png") and self.db.resolve_signature_path(a["signature_png"]).exists())
+            has_pfx = bool(a.get("signature_pfx") and self.db.resolve_signature_path(a["signature_pfx"]).exists())
             sig_status = "🖼 PNG" if has_png else ""
             if has_pfx:
                 sig_status = f"{sig_status} + 🔐 PFX".strip(" +")
@@ -886,18 +920,20 @@ class AutomatDocsWindow(QMainWindow):
         self.inp_contribution.setText(author["contribution"])
 
         self.current_sig_png_path = author.get("signature_png", "")
-        if self.current_sig_png_path and Path(self.current_sig_png_path).exists():
+        if self.current_sig_png_path and self.db.resolve_signature_path(self.current_sig_png_path).exists():
             self.lbl_sig_png.setText(f"✅ {Path(self.current_sig_png_path).name}")
             self.lbl_sig_png.setStyleSheet("color: #16A34A; font-weight: 600;")
         else:
-            self._clear_signature_png()
+            self.lbl_sig_png.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_png_path else "Не выбрана")
+            self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
         self.current_sig_pfx_path = author.get("signature_pfx", "")
-        if self.current_sig_pfx_path and Path(self.current_sig_pfx_path).exists():
+        if self.current_sig_pfx_path and self.db.resolve_signature_path(self.current_sig_pfx_path).exists():
             self.lbl_sig_pfx.setText(f"🔐 {Path(self.current_sig_pfx_path).name}")
             self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
         else:
-            self._clear_signature_pfx()
+            self.lbl_sig_pfx.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_pfx_path else "Не выбрана")
+            self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
 
         self.btn_save_author.setText(f"💾 Обновить данные автора (ID {author['id']})")
 
@@ -1208,11 +1244,19 @@ class AutomatDocsWindow(QMainWindow):
             self.inp_output_dir.setText(d)
 
     def _run_generation(self):
+        if self.worker is not None:
+            return
         if not self.modules_data:
             QMessageBox.warning(self, "Нет модулей", "Сначала добавьте или загрузите хотя бы один модуль программы.")
             return
 
-        authors_by_id = {a["id"]: a for a in self.authors_cache}
+        authors_by_id = {}
+        for author in self.authors_cache:
+            prepared = dict(author)
+            for key in ("signature_png", "signature_pfx"):
+                if prepared.get(key):
+                    prepared[key] = str(self.db.resolve_signature_path(prepared[key]))
+            authors_by_id[prepared["id"]] = prepared
         tasks = []
         for idx, mod in enumerate(self.modules_data, start=1):
             selected_authors = [authors_by_id[aid] for aid in mod["author_ids"] if aid in authors_by_id]
@@ -1234,11 +1278,18 @@ class AutomatDocsWindow(QMainWindow):
                 "main_author": main_author,
             })
 
-        templates_dir = Path(self.inp_templates_dir.text().strip())
-        output_dir = Path(self.inp_output_dir.text().strip())
+        if not self.inp_templates_dir.text().strip() or not self.inp_output_dir.text().strip():
+            QMessageBox.warning(self, "Пути", "Укажите папку шаблонов и папку сохранения.")
+            return
+        templates_dir = absolute_path(self.inp_templates_dir.text().strip(), self.paths.project_dir)
+        output_dir = absolute_path(self.inp_output_dir.text().strip(), self.paths.data_dir)
+        if not templates_dir.is_dir():
+            QMessageBox.warning(self, "Шаблоны", f"Папка шаблонов не найдена:\n{templates_dir}")
+            return
         sign_date_str = f"{self.date_sign.date().toString('dd.MM.yyyy')}г."
 
-        self.btn_generate.setEnabled(False)
+        self._set_generation_busy(True)
+        self._generation_outcome = None
         self.progress_bar.setValue(0)
 
         self.worker = GenerationWorker(
@@ -1251,6 +1302,9 @@ class AutomatDocsWindow(QMainWindow):
         self.worker.progress.connect(self._on_gen_progress)
         self.worker.finished_ok.connect(self._on_gen_finished)
         self.worker.failed.connect(self._on_gen_failed)
+        self.worker.module_completed.connect(self._on_module_generated)
+        self.worker.finished.connect(self._on_worker_stopped)
+        self.worker.setParent(self)
         self.worker.start()
 
     def _on_gen_progress(self, percent: int, message: str):
@@ -1258,24 +1312,98 @@ class AutomatDocsWindow(QMainWindow):
         self.lbl_status.setText(message)
 
     def _on_gen_finished(self, count: int, out_path: str):
-        self.btn_generate.setEnabled(True)
-        # Обновляем таблицу, чтобы отобразилось точное число страниц созданных листингов
-        self._refresh_modules_table()
-        # Автоматически открываем папку с готовыми документами
-        open_folder_in_explorer(out_path)
-        QMessageBox.information(
-            self,
-            "Успешно выполнено",
-            f"Создано комплектов документов (по 6 файлов): {count} шт.\n\nПапка с результатами открыта:\n{out_path}",
-        )
+        self._generation_outcome = ("ok", count, out_path)
 
     def _on_gen_failed(self, err_msg: str):
-        self.btn_generate.setEnabled(True)
+        self._generation_outcome = ("error", err_msg)
         self.lbl_status.setText(f"Ошибка: {err_msg}")
-        QMessageBox.critical(self, "Ошибка при генерации", f"Произошла ошибка:\n{err_msg}")
+
+    def _on_module_generated(self, row: int, pages: int):
+        if 0 <= row < len(self.modules_data):
+            self.modules_data[row]["listing_pages"] = pages
+            self._refresh_modules_table()
+
+    def _set_generation_busy(self, busy: bool):
+        for control in self._generation_controls:
+            control.setEnabled(not busy)
+
+    def _on_worker_stopped(self):
+        # QThread.finished приходит после завершения run(): окно уже можно закрыть.
+        worker = self.worker
+        self.worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._set_generation_busy(False)
+        self._refresh_modules_table()
+        result = self._generation_outcome
+        if result and not self.suppress_notifications:
+            if result[0] == "ok":
+                _, count, out_path = result
+                open_folder_in_explorer(out_path)
+                QMessageBox.information(
+                    self, "Успешно выполнено",
+                    f"Создано комплектов документов (по 6 файлов): {count} шт.\n\nПапка с результатами:\n{out_path}",
+                )
+            else:
+                QMessageBox.critical(self, "Ошибка при генерации", f"Произошла ошибка:\n{result[1]}")
+        self.generation_stopped.emit()
 
 
-def resolve_icon_path() -> Path:
+class AutomatDocsWindow(QMainWindow):
+    def __init__(self, icon_path: Path | None = None, paths: AppPaths | None = None):
+        super().__init__()
+        self.setWindowTitle("Automat docs — Автоматизация документов")
+        self.resize(1500, 900)
+        if icon_path and icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        self._close_when_finished = False
+
+        central = QWidget()
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(8, 0, 0, 0)
+        self.setCentralWidget(central)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("Navigation")
+        self.navigation.setFixedWidth(155)
+        self.navigation.addItem("Документы")
+        self.navigation.setAccessibleName("Разделы приложения")
+        self.stack = QStackedWidget()
+        # Экран создаётся один раз: переключение сохраняет формы и таблицы.
+        self.documents = DocumentsWidget(paths or resolve_paths())
+        self.stack.addWidget(self.documents)
+        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.navigation.setCurrentRow(0)
+        self.documents.generation_stopped.connect(self._on_generation_stopped)
+        layout.addWidget(self.navigation)
+        layout.addWidget(self.stack, stretch=1)
+
+    def closeEvent(self, event):
+        if self.documents.worker is not None:
+            if not self._close_when_finished:
+                answer = QMessageBox.question(
+                    self, "Выполняется генерация",
+                    "Документы ещё создаются. Дождаться завершения и закрыть окно?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    self._close_when_finished = True
+                    self.documents.suppress_notifications = True
+                    self.documents.lbl_status.setText("Окно закроется после завершения генерации…")
+            # Вложенный цикл диалога мог уже обработать QThread.finished.
+            if self._close_when_finished and self.documents.worker is None:
+                event.accept()
+                return
+            event.ignore()
+            return
+        event.accept()
+
+    def _on_generation_stopped(self):
+        if self._close_when_finished:
+            QTimer.singleShot(0, self.close)
+
+
+def resolve_icon_path(paths: AppPaths | None = None) -> Path:
     """
     Ищет icon.ico:
     1) Внутри распакованного архива PyInstaller (sys._MEIPASS)
@@ -1283,20 +1411,55 @@ def resolve_icon_path() -> Path:
     3) В рабочей папке проекта
     """
     candidates = []
+    if paths is not None:
+        candidates.extend((paths.resource_dir / "icon.ico", paths.project_dir / "icon.ico"))
     if hasattr(sys, "_MEIPASS"):
         candidates.append(Path(sys._MEIPASS) / "icon.ico")
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).resolve().parent / "icon.ico")
     candidates.append(Path(__file__).resolve().parent / "icon.ico")
-    candidates.append(Path.cwd() / "icon.ico")
 
     for p in candidates:
         if p.exists():
             return p
-    return Path("icon.ico")
+    return Path(__file__).resolve().parent / "icon.ico"
+
+
+def select_startup_paths(options) -> AppPaths | None:
+    values = {key: getattr(options, key) for key in ("project_dir", "data_dir", "db_path", "templates_dir")}
+    while True:
+        try:
+            return resolve_paths(**values)
+        except AmbiguousDatabaseError as exc:
+            message = QMessageBox()
+            message.setIcon(QMessageBox.Icon.Warning)
+            message.setWindowTitle("Выбор базы авторов")
+            message.setText(str(exc))
+            message.setTextFormat(Qt.TextFormat.PlainText)
+            choose = message.addButton("Выбрать базу…", QMessageBox.ButtonRole.AcceptRole)
+            message.addButton(QMessageBox.StandardButton.Cancel)
+            message.exec()
+            if message.clickedButton() != choose:
+                return None
+            filename, _ = QFileDialog.getOpenFileName(
+                None, "Выберите существующую базу авторов", str(exc.candidates[0].parent),
+                "Базы SQLite (*.db *.sqlite *.sqlite3);;Все файлы (*)",
+            )
+            if not filename:
+                return None
+            values["db_path"] = filename
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(None, "Пути приложения", str(exc))
+            return None
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Automat docs — подготовка документов")
+    parser.add_argument("--project-dir", help="Папка проекта с существующими данными и шаблонами")
+    parser.add_argument("--data-dir", help="Папка данных: database/, signatures/, output/")
+    parser.add_argument("--db-path", help="Путь к существующей базе SQLite (без переноса)")
+    parser.add_argument("--templates-dir", help="Папка редактируемых шаблонов DOCX")
+    options, qt_args = parser.parse_known_args()
     # Защита для режима --noconsole в PyInstaller (чтобы ни одна библиотека не падала при выводе в консоль)
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
@@ -1311,17 +1474,24 @@ def main():
         except Exception:
             pass
 
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0], *qt_args])
     app.setStyleSheet(MODERN_QSS)
 
-    icon_path = resolve_icon_path()
+    paths = select_startup_paths(options)
+    if paths is None:
+        return 1
+    icon_path = resolve_icon_path(paths)
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    window = AutomatDocsWindow(icon_path=icon_path)
+    try:
+        window = AutomatDocsWindow(icon_path=icon_path, paths=paths)
+    except Exception as exc:
+        QMessageBox.critical(None, "Не удалось открыть данные", f"База: {paths.db_path}\n{exc}")
+        return 1
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

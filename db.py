@@ -2,12 +2,14 @@
 import os
 import shutil
 import sqlite3
-import time
+from uuid import uuid4
 from pathlib import Path
 
-DB_PATH = Path("database/authors.db")
-SIGNATURES_PNG_DIR = Path("signatures/png")
-SIGNATURES_PFX_DIR = Path("signatures/pfx")
+from app_paths import data_root_for_database, resolve_data_file, resolve_paths
+
+DB_PATH = Path(__file__).resolve().parent / "database/authors.db"
+SIGNATURES_PNG_DIR = DB_PATH.parent.parent / "signatures/png"
+SIGNATURES_PFX_DIR = DB_PATH.parent.parent / "signatures/pfx"
 
 
 def compute_initials(full_name: str) -> tuple[str, str]:
@@ -54,41 +56,55 @@ def build_passport_string(
     )
 
 
-def copy_signature_file(src_path: str, kind: str, full_name: str) -> str:
+def copy_signature_file(
+    src_path: str, kind: str, full_name: str, *, data_dir: Path | None = None
+) -> str:
     """
     Копирует выбранный файл подписи (.png или .pfx) в локальную папку программы
     signatures/png или signatures/pfx и возвращает относительный путь.
     """
     if not src_path:
         return ""
-    src = Path(src_path)
+    root = Path(data_dir).resolve() if data_dir is not None else resolve_paths().data_dir
+    src = resolve_data_file(src_path, root)
     if not src.exists():
-        return ""
+        return src_path  # Не теряем старую ссылку при временно недоступном файле.
 
-    target_dir = SIGNATURES_PNG_DIR if kind == "png" else SIGNATURES_PFX_DIR
+    if kind not in ("png", "pfx"):
+        raise ValueError(f"Неизвестный тип подписи: {kind}")
+    target_dir = root / "signatures" / kind
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # Если файл уже лежит внутри папки signatures — не копируем повторно
     try:
         if src.resolve().parent == target_dir.resolve():
-            return str(src)
+            return src.relative_to(root).as_posix()
     except Exception:
         pass
 
     safe_name = "".join(c if c.isalnum() else "_" for c in full_name.strip()) or "author"
-    dst_name = f"{safe_name}_{int(time.time())}{src.suffix.lower()}"
+    dst_name = f"{safe_name}_{uuid4().hex}{src.suffix.lower()}"
     dst = target_dir / dst_name
     shutil.copy2(src, dst)
-    return str(dst)
+    return dst.relative_to(root).as_posix()
 
 
 class AuthorDB:
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Path | None = None, *, data_dir: Path | None = None):
+        if db_path is None:
+            paths = resolve_paths(data_dir=data_dir)
+            self.db_path = paths.db_path
+            self.data_dir = paths.data_dir
+        else:
+            self.db_path = Path(db_path).resolve()
+            self.data_dir = Path(data_dir).resolve() if data_dir is not None else data_root_for_database(self.db_path)
         os.makedirs(self.db_path.parent, exist_ok=True)
-        SIGNATURES_PNG_DIR.mkdir(parents=True, exist_ok=True)
-        SIGNATURES_PFX_DIR.mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "signatures/png").mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "signatures/pfx").mkdir(parents=True, exist_ok=True)
         self._init_table()
+
+    def resolve_signature_path(self, value: str) -> Path:
+        return resolve_data_file(value, self.data_dir)
 
     def _get_conn(self):
         conn = sqlite3.connect(self.db_path)
@@ -154,8 +170,8 @@ class AuthorDB:
             data.get("pass_code", ""),
         ) or data.get("passport_info", "").strip()
 
-        sig_png = copy_signature_file(data.get("signature_png", ""), "png", data["full_name"])
-        sig_pfx = copy_signature_file(data.get("signature_pfx", ""), "pfx", data["full_name"])
+        sig_png = copy_signature_file(data.get("signature_png", ""), "png", data["full_name"], data_dir=self.data_dir)
+        sig_pfx = copy_signature_file(data.get("signature_pfx", ""), "pfx", data["full_name"], data_dir=self.data_dir)
 
         with self._get_conn() as conn:
             cur = conn.execute("""
@@ -201,8 +217,8 @@ class AuthorDB:
             data.get("pass_code", ""),
         ) or data.get("passport_info", "").strip()
 
-        sig_png = copy_signature_file(data.get("signature_png", ""), "png", data["full_name"])
-        sig_pfx = copy_signature_file(data.get("signature_pfx", ""), "pfx", data["full_name"])
+        sig_png = copy_signature_file(data.get("signature_png", ""), "png", data["full_name"], data_dir=self.data_dir)
+        sig_pfx = copy_signature_file(data.get("signature_pfx", ""), "pfx", data["full_name"], data_dir=self.data_dir)
 
         with self._get_conn() as conn:
             conn.execute("""
