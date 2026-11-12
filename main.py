@@ -1,10 +1,20 @@
 # main.py
+import argparse
 import os
 import re
 import sys
 from pathlib import Path
+from copy import deepcopy
 
-from PyQt6.QtCore import QDate, QThread, QUrl, Qt, pyqtSignal
+# Этот режим обязан завершиться до импорта Qt и создания QApplication.
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    if len(sys.argv) > 1 and sys.argv[1] == "--ocr-worker":
+        from ocr_worker import main as ocr_worker_main
+        sys.exit(ocr_worker_main(sys.argv[2:]))
+
+from PyQt6.QtCore import QDate, QThread, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -28,7 +38,9 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -37,175 +49,20 @@ from PyQt6.QtWidgets import (
 )
 
 from db import AuthorDB
+from app_paths import AppPaths, AmbiguousDatabaseError, absolute_path, resolve_paths
 from generator import (
     generate_module_documents,
     import_modules_from_excel,
     scan_listings_directory,
 )
+from ui_shell import (
+    APP_NAME, MODERN_QSS, SECTIONS, ElidedLabel, HeroBanner,
+    PlannedSection, Sidebar, section_icon,
+)
+from ocr_widget import OcrWidget
 
 
-MODERN_QSS = """
-QMainWindow, QWidget {
-    background-color: #F4F6F9;
-    color: #1E293B;
-    font-family: 'Segoe UI', 'Inter', sans-serif;
-    font-size: 13px;
-}
 
-QToolTip {
-    background-color: #1E293B;
-    color: #FFFFFF;
-    border: 1px solid #334155;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-}
-
-QFrame#HeaderBanner {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E3A8A, stop:1 #2563EB);
-    border-radius: 10px;
-    padding: 10px 16px;
-}
-QLabel#HeaderTitle {
-    color: #FFFFFF;
-    font-size: 20px;
-    font-weight: 700;
-    background: transparent;
-}
-QLabel#HeaderSubtitle {
-    color: #DBEAFE;
-    font-size: 12px;
-    background: transparent;
-}
-
-QTabWidget::pane {
-    border: 1px solid #E2E8F0;
-    background: #FFFFFF;
-    border-radius: 10px;
-    top: -1px;
-}
-QTabBar::tab {
-    background: #E2E8F0;
-    color: #475569;
-    font-weight: 600;
-    padding: 10px 22px;
-    margin-right: 6px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-}
-QTabBar::tab:selected {
-    background: #FFFFFF;
-    color: #2563EB;
-    border: 1px solid #E2E8F0;
-    border-bottom: 2px solid #2563EB;
-}
-QTabBar::tab:hover:!selected {
-    background: #CBD5E1;
-}
-
-QGroupBox {
-    background-color: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    margin-top: 12px;
-    padding: 12px;
-    font-weight: 600;
-    color: #0F172A;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    padding: 0 6px;
-    color: #1E3A8A;
-    background-color: #FFFFFF;
-}
-
-QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QDateEdit {
-    background-color: #F8FAFC;
-    border: 1px solid #CBD5E1;
-    border-radius: 6px;
-    padding: 5px 9px;
-    color: #0F172A;
-}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QDateEdit:focus {
-    border: 1.5px solid #2563EB;
-    background-color: #FFFFFF;
-}
-
-QTableWidget, QListWidget {
-    background-color: #FFFFFF;
-    alternate-background-color: #F8FAFC;
-    border: 1px solid #CBD5E1;
-    border-radius: 8px;
-    gridline-color: #E2E8F0;
-    selection-background-color: #DBEAFE;
-    selection-color: #1E3A8A;
-}
-QHeaderView::section {
-    background-color: #F1F5F9;
-    color: #334155;
-    font-weight: 600;
-    padding: 8px;
-    border: none;
-    border-bottom: 1px solid #CBD5E1;
-    border-right: 1px solid #E2E8F0;
-}
-
-QPushButton {
-    background-color: #2563EB;
-    color: #FFFFFF;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    padding: 7px 14px;
-}
-QPushButton:hover {
-    background-color: #1D4ED8;
-}
-QPushButton:pressed {
-    background-color: #1E40AF;
-}
-QPushButton#SecondaryBtn {
-    background-color: #F1F5F9;
-    color: #334155;
-    border: 1px solid #CBD5E1;
-}
-QPushButton#SecondaryBtn:hover {
-    background-color: #E2E8F0;
-}
-QPushButton#DangerBtn {
-    background-color: #EF4444;
-    color: #FFFFFF;
-}
-QPushButton#DangerBtn:hover {
-    background-color: #DC2626;
-}
-QPushButton#SuccessBtn {
-    background-color: #16A34A;
-    color: #FFFFFF;
-    font-size: 14px;
-    padding: 11px 24px;
-    border-radius: 8px;
-}
-QPushButton#SuccessBtn:hover {
-    background-color: #15803D;
-}
-
-QProgressBar {
-    border: 1px solid #CBD5E1;
-    border-radius: 6px;
-    background-color: #F1F5F9;
-    text-align: center;
-    font-weight: 600;
-    color: #0F172A;
-    height: 22px;
-}
-QProgressBar::chunk {
-    background-color: #16A34A;
-    border-radius: 5px;
-}
-"""
 
 
 def set_hint_and_tooltip(widget, hint_text: str, is_default_value: bool = False):
@@ -271,6 +128,7 @@ class GenerationWorker(QThread):
     progress = pyqtSignal(int, str)
     finished_ok = pyqtSignal(int, str)
     failed = pyqtSignal(str)
+    module_completed = pyqtSignal(int, int)  # Строка таблицы и пересчитанные страницы.
 
     def __init__(
         self,
@@ -281,7 +139,7 @@ class GenerationWorker(QThread):
         convert_pdf: bool,
     ):
         super().__init__()
-        self.tasks = tasks
+        self.tasks = deepcopy(tasks)
         self.templates_dir = templates_dir
         self.output_dir = output_dir
         self.sign_date = sign_date
@@ -296,31 +154,38 @@ class GenerationWorker(QThread):
                     int((idx - 1) / total * 100),
                     f"Обработка ({idx}/{total}): «{prog_name}»...",
                 )
-                generate_module_documents(
-                    index=idx,
-                    module_info=task["module"],
-                    selected_authors=task["authors"],
-                    main_author=task["main_author"],
-                    templates_dir=self.templates_dir,
-                    output_base_dir=self.output_dir,
-                    sign_date=self.sign_date,
-                    convert_pdf=self.convert_pdf,
-                )
+                try:
+                    generate_module_documents(
+                        index=idx,
+                        module_info=task["module"],
+                        selected_authors=task["authors"],
+                        main_author=task["main_author"],
+                        templates_dir=self.templates_dir,
+                        output_base_dir=self.output_dir,
+                        sign_date=self.sign_date,
+                        convert_pdf=self.convert_pdf,
+                    )
+                finally:
+                    # Страницы сохраняются и при последующей ошибке экспорта PDF.
+                    self.module_completed.emit(idx - 1, int(task["module"]["listing_pages"]))
             self.progress.emit(100, "Генерация всех пакетов документов успешно завершена!")
             self.finished_ok.emit(total, str(self.output_dir.resolve()))
         except Exception as e:
             self.failed.emit(str(e))
 
 
-class AutomatDocsWindow(QMainWindow):
-    def __init__(self, icon_path: Path):
-        super().__init__()
-        self.setWindowTitle("Automat docs — Автоматизация документов для регистрации программ ЭВМ")
-        self.resize(1380, 850)
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+class DocumentsWidget(QWidget):
+    generation_stopped = pyqtSignal()
 
-        self.db = AuthorDB()
+    def __init__(self, paths: AppPaths, parent=None):
+        super().__init__(parent)
+        self.paths = paths
+        self.worker: GenerationWorker | None = None
+        self.suppress_notifications = False
+        self._generation_outcome = None
+        self._generation_controls = []
+
+        self.db = AuthorDB(paths.db_path, data_dir=paths.data_dir)
         self.authors_cache: list[dict] = []
         self.modules_data: list[dict] = []
         self.selected_author_id_for_edit: int | None = None
@@ -332,33 +197,41 @@ class AutomatDocsWindow(QMainWindow):
         self._refresh_authors_ui()
 
     def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(16, 12, 16, 12)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(10)
 
-        banner = QFrame()
-        banner.setObjectName("HeaderBanner")
-        banner_layout = QHBoxLayout(banner)
-        title_box = QVBoxLayout()
-        lbl_title = QLabel("Automat docs")
-        lbl_title.setObjectName("HeaderTitle")
-        lbl_sub = QLabel(
-            "Локальная офлайн-система подготовки комплектов документов Роспатента (Заявление, Дополнение, Согласия, Ходатайство, Листинг)"
-        )
-        lbl_sub.setObjectName("HeaderSubtitle")
-        title_box.addWidget(lbl_title)
-        title_box.addWidget(lbl_sub)
-        banner_layout.addLayout(title_box)
-        banner_layout.addStretch()
-        root_layout.addWidget(banner)
+        database_bar = QFrame()
+        database_bar.setObjectName("DatabaseBar")
+        database_layout = QHBoxLayout(database_bar)
+        database_layout.setContentsMargins(14, 9, 12, 9)
+        database_layout.setSpacing(10)
+        database_layout.addWidget(QLabel("База авторов:"))
+        database_path = QLineEdit(str(self.paths.db_path))
+        database_path.setReadOnly(True)
+        database_path.setToolTip(str(self.paths.db_path))
+        database_layout.addWidget(database_path, 1)
+        open_database_folder = QPushButton()
+        open_database_folder.setObjectName("SecondaryBtn")
+        open_database_folder.setIcon(section_icon("folder"))
+        open_database_folder.setFixedWidth(42)
+        open_database_folder.setToolTip("Открыть папку базы авторов")
+        open_database_folder.clicked.connect(lambda: open_folder_in_explorer(str(self.paths.db_path.parent)))
+        database_layout.addWidget(open_database_folder)
+        status = QLabel("●  База подключена")
+        status.setObjectName("DatabaseStatus")
+        database_layout.addWidget(status)
+        root_layout.addWidget(database_bar)
 
         self.tabs = QTabWidget()
         self.tab_authors = QWidget()
         self.tab_modules = QWidget()
+        modules_scroll = QScrollArea()
+        modules_scroll.setWidgetResizable(True)
+        modules_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        modules_scroll.setWidget(self.tab_modules)
         self.tabs.addTab(self.tab_authors, "👤 1. База авторов")
-        self.tabs.addTab(self.tab_modules, "📦 2. Модули, авторы и генерация документов")
+        self.tabs.addTab(modules_scroll, "📦 2. Модули, авторы и генерация документов")
         root_layout.addWidget(self.tabs, stretch=1)
 
         self._build_authors_tab()
@@ -408,8 +281,9 @@ class AutomatDocsWindow(QMainWindow):
         left_vbox.addLayout(btn_row_left)
 
         right_group = QGroupBox("Карточка автора (добавление / редактирование)")
-        right_group.setMinimumWidth(600)
+        right_group.setMinimumWidth(540)
         form = QFormLayout(right_group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setVerticalSpacing(8)
         form.setHorizontalSpacing(12)
 
@@ -507,9 +381,9 @@ class AutomatDocsWindow(QMainWindow):
         self.inp_pass_code.setFixedWidth(110)
         self.inp_pass_code.textEdited.connect(self._on_pass_code_edited)
 
-        pass_hbox2.addWidget(QLabel("Дата выдачи:"))
+        pass_hbox2.addWidget(QLabel("Дата:"))
         pass_hbox2.addWidget(self.inp_pass_date)
-        pass_hbox2.addWidget(QLabel("Код подразд.:"))
+        pass_hbox2.addWidget(QLabel("Код:"))
         pass_hbox2.addWidget(self.inp_pass_code)
         pass_hbox2.addStretch()
 
@@ -537,16 +411,18 @@ class AutomatDocsWindow(QMainWindow):
             "Выберите изображение подписи (.png на прозрачном фоне) для автоматической вставки в Согласия"
         )
         btn_pick_png.clicked.connect(self._pick_signature_png)
-        btn_clear_png = QPushButton("✖")
+        self.btn_pick_png = btn_pick_png
+        btn_clear_png = QPushButton("×")
+        self.btn_clear_png = btn_clear_png
         btn_clear_png.setObjectName("SecondaryBtn")
         btn_clear_png.setFixedWidth(32)
         btn_clear_png.setToolTip("Открепить картинку подписи .png")
         btn_clear_png.clicked.connect(self._clear_signature_png)
-        self.lbl_sig_png = QLabel("Не выбрана")
+        self.lbl_sig_png = ElidedLabel("Не выбрана")
         self.lbl_sig_png.setStyleSheet("color: #64748B;")
-        sig_png_hbox.addWidget(btn_pick_png)
+        sig_png_hbox.addWidget(btn_pick_png, stretch=1)
+        sig_png_hbox.addWidget(self.lbl_sig_png)
         sig_png_hbox.addWidget(btn_clear_png)
-        sig_png_hbox.addWidget(self.lbl_sig_png, stretch=1)
 
         sig_pfx_widget = QWidget()
         sig_pfx_hbox = QHBoxLayout(sig_pfx_widget)
@@ -555,19 +431,21 @@ class AutomatDocsWindow(QMainWindow):
         btn_pick_pfx = QPushButton("🔐 Добавить ЭЦП (.pfx)")
         btn_pick_pfx.setObjectName("SecondaryBtn")
         btn_pick_pfx.setToolTip(
-            "Выберите файл сертификата электронной подписи (.pfx) для сохранения в папке программы"
+            "Сохраняет PFX в карточке автора. Электронное подписание документов не выполняется."
         )
         btn_pick_pfx.clicked.connect(self._pick_signature_pfx)
-        btn_clear_pfx = QPushButton("✖")
+        self.btn_pick_pfx = btn_pick_pfx
+        btn_clear_pfx = QPushButton("×")
+        self.btn_clear_pfx = btn_clear_pfx
         btn_clear_pfx.setObjectName("SecondaryBtn")
         btn_clear_pfx.setFixedWidth(32)
         btn_clear_pfx.setToolTip("Открепить файл .pfx")
         btn_clear_pfx.clicked.connect(self._clear_signature_pfx)
-        self.lbl_sig_pfx = QLabel("Не выбрана")
+        self.lbl_sig_pfx = ElidedLabel("Не выбрана")
         self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
-        sig_pfx_hbox.addWidget(btn_pick_pfx)
+        sig_pfx_hbox.addWidget(btn_pick_pfx, stretch=1)
+        sig_pfx_hbox.addWidget(self.lbl_sig_pfx)
         sig_pfx_hbox.addWidget(btn_clear_pfx)
-        sig_pfx_hbox.addWidget(self.lbl_sig_pfx, stretch=1)
 
         form.addRow("Полное ФИО:*", self.inp_fio)
         form.addRow("Дата рождения:*", dob_widget)
@@ -587,7 +465,12 @@ class AutomatDocsWindow(QMainWindow):
         form.addRow("", self.btn_save_author)
 
         splitter.addWidget(left_group)
-        splitter.addWidget(right_group)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        form_scroll.setMinimumWidth(560)
+        form_scroll.setWidget(right_group)
+        splitter.addWidget(form_scroll)
         splitter.setSizes([660, 660])
         layout.addWidget(splitter)
 
@@ -680,12 +563,12 @@ class AutomatDocsWindow(QMainWindow):
         gen_group = QGroupBox("Шаг 3. Генерация пакетов документов")
         gen_grid = QGridLayout(gen_group)
 
-        self.inp_templates_dir = QLineEdit(str(Path("templates").resolve()))
+        self.inp_templates_dir = QLineEdit(str(self.paths.templates_dir))
         btn_browse_tpl = QPushButton("Обзор...")
         btn_browse_tpl.setObjectName("SecondaryBtn")
         btn_browse_tpl.clicked.connect(self._browse_templates_dir)
 
-        self.inp_output_dir = QLineEdit(str(Path("output").resolve()))
+        self.inp_output_dir = QLineEdit(str(self.paths.output_dir))
         btn_browse_out = QPushButton("Обзор...")
         btn_browse_out.setObjectName("SecondaryBtn")
         btn_browse_out.clicked.connect(self._browse_output_dir)
@@ -703,8 +586,9 @@ class AutomatDocsWindow(QMainWindow):
         self.date_sign.setToolTip("Дата подписи документов (в согласия подставится в формате ДД.ММ.ГГГГг.)")
 
         self.chk_convert_pdf = QCheckBox(
-            "Также автоматически конвертировать созданные документы в PDF (с уже вставленными подписями авторов)"
+            "Также создать PDF через Microsoft Word"
         )
+        self.chk_convert_pdf.setToolTip("Конвертировать созданные DOCX в PDF с уже вставленными PNG-подписями авторов")
 
         opt_hbox.addWidget(QLabel("📅 Дата подписи:"))
         opt_hbox.addWidget(self.date_sign)
@@ -734,6 +618,11 @@ class AutomatDocsWindow(QMainWindow):
         gen_grid.addWidget(self.lbl_status, 4, 0, 1, 3)
 
         vbox.addWidget(gen_group)
+        self._generation_controls = [
+            self.tab_authors, toolbar_group, mod_group, auth_sel_group,
+            self.inp_templates_dir, btn_browse_tpl, self.inp_output_dir,
+            btn_browse_out, options_row, self.btn_generate,
+        ]
 
     # --------------------------------------------------------------------------
     # Вспомогательные обработчики ввода и подписей
@@ -777,11 +666,13 @@ class AutomatDocsWindow(QMainWindow):
         if file_path:
             self.current_sig_png_path = file_path
             self.lbl_sig_png.setText(f"✅ {Path(file_path).name}")
+            self.lbl_sig_png.setToolTip(file_path)
             self.lbl_sig_png.setStyleSheet("color: #16A34A; font-weight: 600;")
 
     def _clear_signature_png(self):
         self.current_sig_png_path = ""
         self.lbl_sig_png.setText("Не выбрана")
+        self.lbl_sig_png.setToolTip("")
         self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
     def _pick_signature_pfx(self):
@@ -791,11 +682,13 @@ class AutomatDocsWindow(QMainWindow):
         if file_path:
             self.current_sig_pfx_path = file_path
             self.lbl_sig_pfx.setText(f"🔐 {Path(file_path).name}")
+            self.lbl_sig_pfx.setToolTip(file_path)
             self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
 
     def _clear_signature_pfx(self):
         self.current_sig_pfx_path = ""
         self.lbl_sig_pfx.setText("Не выбрана")
+        self.lbl_sig_pfx.setToolTip("")
         self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
 
     # --------------------------------------------------------------------------
@@ -806,8 +699,8 @@ class AutomatDocsWindow(QMainWindow):
         self.tbl_authors.setRowCount(len(self.authors_cache))
         for r_idx, a in enumerate(self.authors_cache):
             dob_str = f"{a['birth_day']}.{a['birth_month']}.{a['birth_year']}"
-            has_png = bool(a.get("signature_png") and Path(a["signature_png"]).exists())
-            has_pfx = bool(a.get("signature_pfx") and Path(a["signature_pfx"]).exists())
+            has_png = bool(a.get("signature_png") and self.db.resolve_signature_path(a["signature_png"]).exists())
+            has_pfx = bool(a.get("signature_pfx") and self.db.resolve_signature_path(a["signature_pfx"]).exists())
             sig_status = "🖼 PNG" if has_png else ""
             if has_pfx:
                 sig_status = f"{sig_status} + 🔐 PFX".strip(" +")
@@ -886,18 +779,22 @@ class AutomatDocsWindow(QMainWindow):
         self.inp_contribution.setText(author["contribution"])
 
         self.current_sig_png_path = author.get("signature_png", "")
-        if self.current_sig_png_path and Path(self.current_sig_png_path).exists():
-            self.lbl_sig_png.setText(f"✅ {Path(self.current_sig_png_path).name}")
+        self.lbl_sig_png.setToolTip(str(self.db.resolve_signature_path(self.current_sig_png_path)) if self.current_sig_png_path else "")
+        if self.current_sig_png_path and self.db.resolve_signature_path(self.current_sig_png_path).exists():
+            self.lbl_sig_png.setText(f"✅ {self.db.resolve_signature_path(self.current_sig_png_path).name}")
             self.lbl_sig_png.setStyleSheet("color: #16A34A; font-weight: 600;")
         else:
-            self._clear_signature_png()
+            self.lbl_sig_png.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_png_path else "Не выбрана")
+            self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
         self.current_sig_pfx_path = author.get("signature_pfx", "")
-        if self.current_sig_pfx_path and Path(self.current_sig_pfx_path).exists():
-            self.lbl_sig_pfx.setText(f"🔐 {Path(self.current_sig_pfx_path).name}")
+        self.lbl_sig_pfx.setToolTip(str(self.db.resolve_signature_path(self.current_sig_pfx_path)) if self.current_sig_pfx_path else "")
+        if self.current_sig_pfx_path and self.db.resolve_signature_path(self.current_sig_pfx_path).exists():
+            self.lbl_sig_pfx.setText(f"🔐 {self.db.resolve_signature_path(self.current_sig_pfx_path).name}")
             self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
         else:
-            self._clear_signature_pfx()
+            self.lbl_sig_pfx.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_pfx_path else "Не выбрана")
+            self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
 
         self.btn_save_author.setText(f"💾 Обновить данные автора (ID {author['id']})")
 
@@ -1208,11 +1105,19 @@ class AutomatDocsWindow(QMainWindow):
             self.inp_output_dir.setText(d)
 
     def _run_generation(self):
+        if self.worker is not None:
+            return
         if not self.modules_data:
             QMessageBox.warning(self, "Нет модулей", "Сначала добавьте или загрузите хотя бы один модуль программы.")
             return
 
-        authors_by_id = {a["id"]: a for a in self.authors_cache}
+        authors_by_id = {}
+        for author in self.authors_cache:
+            prepared = dict(author)
+            for key in ("signature_png", "signature_pfx"):
+                if prepared.get(key):
+                    prepared[key] = str(self.db.resolve_signature_path(prepared[key]))
+            authors_by_id[prepared["id"]] = prepared
         tasks = []
         for idx, mod in enumerate(self.modules_data, start=1):
             selected_authors = [authors_by_id[aid] for aid in mod["author_ids"] if aid in authors_by_id]
@@ -1234,11 +1139,18 @@ class AutomatDocsWindow(QMainWindow):
                 "main_author": main_author,
             })
 
-        templates_dir = Path(self.inp_templates_dir.text().strip())
-        output_dir = Path(self.inp_output_dir.text().strip())
+        if not self.inp_templates_dir.text().strip() or not self.inp_output_dir.text().strip():
+            QMessageBox.warning(self, "Пути", "Укажите папку шаблонов и папку сохранения.")
+            return
+        templates_dir = absolute_path(self.inp_templates_dir.text().strip(), self.paths.project_dir)
+        output_dir = absolute_path(self.inp_output_dir.text().strip(), self.paths.data_dir)
+        if not templates_dir.is_dir():
+            QMessageBox.warning(self, "Шаблоны", f"Папка шаблонов не найдена:\n{templates_dir}")
+            return
         sign_date_str = f"{self.date_sign.date().toString('dd.MM.yyyy')}г."
 
-        self.btn_generate.setEnabled(False)
+        self._set_generation_busy(True)
+        self._generation_outcome = None
         self.progress_bar.setValue(0)
 
         self.worker = GenerationWorker(
@@ -1251,6 +1163,9 @@ class AutomatDocsWindow(QMainWindow):
         self.worker.progress.connect(self._on_gen_progress)
         self.worker.finished_ok.connect(self._on_gen_finished)
         self.worker.failed.connect(self._on_gen_failed)
+        self.worker.module_completed.connect(self._on_module_generated)
+        self.worker.finished.connect(self._on_worker_stopped)
+        self.worker.setParent(self)
         self.worker.start()
 
     def _on_gen_progress(self, percent: int, message: str):
@@ -1258,24 +1173,118 @@ class AutomatDocsWindow(QMainWindow):
         self.lbl_status.setText(message)
 
     def _on_gen_finished(self, count: int, out_path: str):
-        self.btn_generate.setEnabled(True)
-        # Обновляем таблицу, чтобы отобразилось точное число страниц созданных листингов
-        self._refresh_modules_table()
-        # Автоматически открываем папку с готовыми документами
-        open_folder_in_explorer(out_path)
-        QMessageBox.information(
-            self,
-            "Успешно выполнено",
-            f"Создано комплектов документов (по 6 файлов): {count} шт.\n\nПапка с результатами открыта:\n{out_path}",
-        )
+        self._generation_outcome = ("ok", count, out_path)
 
     def _on_gen_failed(self, err_msg: str):
-        self.btn_generate.setEnabled(True)
+        self._generation_outcome = ("error", err_msg)
         self.lbl_status.setText(f"Ошибка: {err_msg}")
-        QMessageBox.critical(self, "Ошибка при генерации", f"Произошла ошибка:\n{err_msg}")
+
+    def _on_module_generated(self, row: int, pages: int):
+        if 0 <= row < len(self.modules_data):
+            self.modules_data[row]["listing_pages"] = pages
+            self._refresh_modules_table()
+
+    def _set_generation_busy(self, busy: bool):
+        for control in self._generation_controls:
+            control.setEnabled(not busy)
+
+    def _on_worker_stopped(self):
+        # QThread.finished приходит после завершения run(): окно уже можно закрыть.
+        worker = self.worker
+        self.worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._set_generation_busy(False)
+        self._refresh_modules_table()
+        result = self._generation_outcome
+        if result and not self.suppress_notifications:
+            if result[0] == "ok":
+                _, count, out_path = result
+                open_folder_in_explorer(out_path)
+                QMessageBox.information(
+                    self, "Успешно выполнено",
+                    f"Создано комплектов документов (по 6 файлов): {count} шт.\n\nПапка с результатами:\n{out_path}",
+                )
+            else:
+                QMessageBox.critical(self, "Ошибка при генерации", f"Произошла ошибка:\n{result[1]}")
+        self.generation_stopped.emit()
 
 
-def resolve_icon_path() -> Path:
+class AutomatDocsWindow(QMainWindow):
+    def __init__(self, icon_path: Path | None = None, paths: AppPaths | None = None):
+        super().__init__()
+        self.resize(1600, 940)
+        self.setStyleSheet(MODERN_QSS)
+        self._close_when_finished = False
+
+        central = QWidget()
+        central.setObjectName("AppSurface")
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(8, 8, 12, 8)
+        layout.setSpacing(16)
+        self.setCentralWidget(central)
+        self.sidebar = Sidebar()
+        self.navigation = self.sidebar.navigation
+        layout.addWidget(self.sidebar)
+        workspace = QVBoxLayout()
+        workspace.setSpacing(12)
+        self.banner = HeroBanner()
+        workspace.addWidget(self.banner)
+        self.stack = QStackedWidget()
+        # Экран создаётся один раз: переключение сохраняет формы и таблицы.
+        app_paths = paths or resolve_paths()
+        self.documents = DocumentsWidget(app_paths)
+        self.stack.addWidget(self.documents)
+        self.ocr = OcrWidget(app_paths)
+        self.stack.addWidget(self.ocr)
+        for section in SECTIONS[2:]:
+            self.stack.addWidget(PlannedSection(section))
+        self.navigation.currentRowChanged.connect(self._on_section_changed)
+        self.navigation.setCurrentRow(0)
+        self.documents.generation_stopped.connect(self._on_generation_stopped)
+        self.ocr.stopped.connect(self._on_generation_stopped)
+        workspace.addWidget(self.stack, stretch=1)
+        layout.addLayout(workspace, stretch=1)
+
+    def _on_section_changed(self, index: int):
+        if not 0 <= index < len(SECTIONS):
+            return
+        section = SECTIONS[index]
+        self.stack.setCurrentIndex(index)
+        self.banner.set_section(section)
+        self.sidebar.set_section(section)
+        self.setWindowTitle(f"{APP_NAME} (Octopus) — {section.caption}")
+        self.setWindowIcon(section_icon(section.key))
+
+    def closeEvent(self, event):
+        if self.documents.worker is not None or self.ocr.is_running:
+            if not self._close_when_finished:
+                answer = QMessageBox.question(
+                    self, "Выполняется обработка",
+                    ("Отменить OCR, сохранить неполный результат и закрыть окно после завершения фоновых задач?"
+                     if self.ocr.is_running else "Документы ещё создаются. Дождаться завершения и закрыть окно?"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    self._close_when_finished = True
+                    self.documents.suppress_notifications = True
+                    self.ocr.cancel()
+                    self.documents.lbl_status.setText("Окно закроется после завершения генерации…")
+            # Вложенный цикл диалога мог уже обработать QThread.finished.
+            if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running:
+                event.accept()
+                return
+            event.ignore()
+            return
+        event.accept()
+
+    def _on_generation_stopped(self):
+        if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running:
+            QTimer.singleShot(0, self.close)
+
+
+def resolve_icon_path(paths: AppPaths | None = None) -> Path:
     """
     Ищет icon.ico:
     1) Внутри распакованного архива PyInstaller (sys._MEIPASS)
@@ -1283,20 +1292,55 @@ def resolve_icon_path() -> Path:
     3) В рабочей папке проекта
     """
     candidates = []
+    if paths is not None:
+        candidates.extend((paths.resource_dir / "icon.ico", paths.project_dir / "icon.ico"))
     if hasattr(sys, "_MEIPASS"):
         candidates.append(Path(sys._MEIPASS) / "icon.ico")
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).resolve().parent / "icon.ico")
     candidates.append(Path(__file__).resolve().parent / "icon.ico")
-    candidates.append(Path.cwd() / "icon.ico")
 
     for p in candidates:
         if p.exists():
             return p
-    return Path("icon.ico")
+    return Path(__file__).resolve().parent / "icon.ico"
+
+
+def select_startup_paths(options) -> AppPaths | None:
+    values = {key: getattr(options, key) for key in ("project_dir", "data_dir", "db_path", "templates_dir")}
+    while True:
+        try:
+            return resolve_paths(**values)
+        except AmbiguousDatabaseError as exc:
+            message = QMessageBox()
+            message.setIcon(QMessageBox.Icon.Warning)
+            message.setWindowTitle("Выбор базы авторов")
+            message.setText(str(exc))
+            message.setTextFormat(Qt.TextFormat.PlainText)
+            choose = message.addButton("Выбрать базу…", QMessageBox.ButtonRole.AcceptRole)
+            message.addButton(QMessageBox.StandardButton.Cancel)
+            message.exec()
+            if message.clickedButton() != choose:
+                return None
+            filename, _ = QFileDialog.getOpenFileName(
+                None, "Выберите существующую базу авторов", str(exc.candidates[0].parent),
+                "Базы SQLite (*.db *.sqlite *.sqlite3);;Все файлы (*)",
+            )
+            if not filename:
+                return None
+            values["db_path"] = filename
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(None, "Пути приложения", str(exc))
+            return None
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Осьминог (Octopus) — работа с документами")
+    parser.add_argument("--project-dir", help="Папка проекта с существующими данными и шаблонами")
+    parser.add_argument("--data-dir", help="Папка данных: database/, signatures/, output/")
+    parser.add_argument("--db-path", help="Путь к существующей базе SQLite (без переноса)")
+    parser.add_argument("--templates-dir", help="Папка редактируемых шаблонов DOCX")
+    options, qt_args = parser.parse_known_args()
     # Защита для режима --noconsole в PyInstaller (чтобы ни одна библиотека не падала при выводе в консоль)
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
@@ -1311,17 +1355,25 @@ def main():
         except Exception:
             pass
 
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0], *qt_args])
+    app.setApplicationDisplayName(f"{APP_NAME} (Octopus)")
     app.setStyleSheet(MODERN_QSS)
 
-    icon_path = resolve_icon_path()
+    paths = select_startup_paths(options)
+    if paths is None:
+        return 1
+    icon_path = resolve_icon_path(paths)
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    window = AutomatDocsWindow(icon_path=icon_path)
+    try:
+        window = AutomatDocsWindow(icon_path=icon_path, paths=paths)
+    except Exception as exc:
+        QMessageBox.critical(None, "Не удалось открыть данные", f"База: {paths.db_path}\n{exc}")
+        return 1
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
