@@ -11,10 +11,11 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QDate, QEventLoop, QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app_paths import AmbiguousDatabaseError, resolve_paths
 from main import AutomatDocsWindow, GenerationWorker, select_startup_paths
+from ui_shell import SECTIONS
 from tests.fixtures import OUTPUT_NAMES, make_legacy_database, make_templates
 
 
@@ -56,7 +57,7 @@ class GuiTests(unittest.TestCase):
             self.addCleanup(mock.stop)
 
     def test_navigation_retains_forms_module_authors_date_and_paths(self):
-        self.assertEqual(self.window.navigation.count(), 1)
+        self.assertEqual(self.window.navigation.count(), len(SECTIONS))
         self.assertEqual(self.window.navigation.item(0).text(), "Документы")
         self.assertEqual(self.docs.tabs.count(), 2)
         self.docs.inp_fio.setText("Несохранённый тест")
@@ -64,10 +65,6 @@ class GuiTests(unittest.TestCase):
         self.docs.date_sign.setDate(QDate(2026, 11, 9))
         self.docs.chk_convert_pdf.setChecked(True)
         authors = list(self.docs.modules_data[0]["author_ids"])
-        # Второй экран добавлен только в тесте; OCR в продукте ещё нет.
-        other = QWidget()
-        self.window.stack.addWidget(other)
-        self.window.navigation.addItem("Тестовый экран")
         self.window.navigation.setCurrentRow(1)
         self.window.navigation.setCurrentRow(0)
         self.assertIs(self.window.stack.currentWidget(), self.docs)
@@ -81,6 +78,50 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.docs.inp_pass_series.text(), "0000")
         self.assertEqual(self.docs.inp_pass_number.text(), "000000")
         self.assertIn("test.png", self.docs.lbl_sig_png.text())
+
+    def test_section_selection_updates_window_banner_and_avatar(self):
+        document_icon = self.window.windowIcon().pixmap(64, 64).toImage()
+        document_avatar = self.window.sidebar.avatar.pixmap().toImage()
+        for index, section in enumerate(SECTIONS):
+            self.window.navigation.setCurrentRow(index)
+            self.app.processEvents()
+            self.assertEqual(self.window.banner.title.text(), section.title)
+            self.assertEqual(self.window.banner.subtitle.text(), section.subtitle)
+            self.assertEqual(self.window.sidebar.caption.text(), section.caption)
+            self.assertIn("Осьминог (Octopus)", self.window.windowTitle())
+            self.assertIn(section.caption, self.window.windowTitle())
+            self.assertEqual(self.window.stack.currentIndex(), index)
+        self.window.navigation.setCurrentRow(1)
+        self.assertNotEqual(document_icon, self.window.windowIcon().pixmap(64, 64).toImage())
+        self.assertNotEqual(document_avatar, self.window.sidebar.avatar.pixmap().toImage())
+        self.assertIn("Пока доступен макет", self.window.stack.currentWidget().notice.text())
+
+    def test_signature_clear_buttons_align_and_preserve_choice(self):
+        self.docs.tbl_authors.selectRow(0)
+        for width, height in ((1672, 945), (1366, 768)):
+            self.window.resize(width, height)
+            self.app.processEvents()
+            self.assertEqual(self.window.size().width(), width)
+            self.assertEqual(self.window.size().height(), height)
+            self.docs.lbl_sig_png.setText("Очень_длинное_имя_подписи_" * 12 + ".png")
+            self.app.processEvents()
+            png = self.docs.btn_clear_png
+            pfx = self.docs.btn_clear_pfx
+            right = self.docs.inp_contribution.mapTo(self.docs, self.docs.inp_contribution.rect().topRight()).x()
+            self.assertEqual(png.mapTo(self.docs, png.rect().topRight()).x(), right)
+            self.assertEqual(pfx.mapTo(self.docs, pfx.rect().topRight()).x(), right)
+            for picker, label, clear in (
+                (self.docs.btn_pick_png, self.docs.lbl_sig_png, png),
+                (self.docs.btn_pick_pfx, self.docs.lbl_sig_pfx, pfx),
+            ):
+                self.assertLess(picker.geometry().right(), label.geometry().left())
+                self.assertLess(label.geometry().right(), clear.geometry().left())
+        self.assertTrue(self.docs.current_sig_png_path)
+        self.docs.btn_clear_png.click()
+        self.assertEqual(self.docs.current_sig_png_path, "")
+        self.assertTrue(self.docs.current_sig_pfx_path)
+        self.docs.btn_clear_pfx.click()
+        self.assertEqual(self.docs.current_sig_pfx_path, "")
 
     def test_gui_generates_six_documents_and_refreshes_pages(self):
         self.docs.modules_data[0]["listing_text"] = "\n".join("print('тест')" for _ in range(150))
@@ -111,6 +152,8 @@ class GuiTests(unittest.TestCase):
             worker = self.docs.worker
             try:
                 wait_until(started.is_set)
+                self.window.navigation.setCurrentRow(1)
+                self.assertIsNot(self.window.stack.currentWidget(), self.docs)
                 self.window.close()
                 self.assertTrue(self.window.isVisible())
                 self.assertFalse(self.window._close_when_finished)

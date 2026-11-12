@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -46,184 +47,13 @@ from generator import (
     import_modules_from_excel,
     scan_listings_directory,
 )
+from ui_shell import (
+    APP_NAME, MODERN_QSS, SECTIONS, ElidedLabel, HeroBanner,
+    PlannedSection, Sidebar, section_icon,
+)
 
 
-MODERN_QSS = """
-QMainWindow, QWidget {
-    background-color: #F4F6F9;
-    color: #1E293B;
-    font-family: 'Segoe UI', 'Inter', sans-serif;
-    font-size: 13px;
-}
 
-QToolTip {
-    background-color: #1E293B;
-    color: #FFFFFF;
-    border: 1px solid #334155;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-}
-
-QFrame#HeaderBanner {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E3A8A, stop:1 #2563EB);
-    border-radius: 10px;
-    padding: 10px 16px;
-}
-QLabel#HeaderTitle {
-    color: #FFFFFF;
-    font-size: 20px;
-    font-weight: 700;
-    background: transparent;
-}
-QLabel#HeaderSubtitle {
-    color: #DBEAFE;
-    font-size: 12px;
-    background: transparent;
-}
-
-QTabWidget::pane {
-    border: 1px solid #E2E8F0;
-    background: #FFFFFF;
-    border-radius: 10px;
-    top: -1px;
-}
-QTabBar::tab {
-    background: #E2E8F0;
-    color: #475569;
-    font-weight: 600;
-    padding: 10px 22px;
-    margin-right: 6px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-}
-QTabBar::tab:selected {
-    background: #FFFFFF;
-    color: #2563EB;
-    border: 1px solid #E2E8F0;
-    border-bottom: 2px solid #2563EB;
-}
-QTabBar::tab:hover:!selected {
-    background: #CBD5E1;
-}
-
-QGroupBox {
-    background-color: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    margin-top: 12px;
-    padding: 12px;
-    font-weight: 600;
-    color: #0F172A;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    padding: 0 6px;
-    color: #1E3A8A;
-    background-color: #FFFFFF;
-}
-
-QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QDateEdit {
-    background-color: #F8FAFC;
-    border: 1px solid #CBD5E1;
-    border-radius: 6px;
-    padding: 5px 9px;
-    color: #0F172A;
-}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QDateEdit:focus {
-    border: 1.5px solid #2563EB;
-    background-color: #FFFFFF;
-}
-
-QTableWidget, QListWidget {
-    background-color: #FFFFFF;
-    alternate-background-color: #F8FAFC;
-    border: 1px solid #CBD5E1;
-    border-radius: 8px;
-    gridline-color: #E2E8F0;
-    selection-background-color: #DBEAFE;
-    selection-color: #1E3A8A;
-}
-QListWidget#Navigation {
-    border: none;
-    border-right: 1px solid #E2E8F0;
-}
-QListWidget#Navigation::item {
-    padding: 12px 8px;
-    margin: 8px 4px;
-    border-radius: 6px;
-    font-weight: 600;
-}
-QListWidget#Navigation::item:selected {
-    background-color: #DBEAFE;
-    color: #1E3A8A;
-}
-QHeaderView::section {
-    background-color: #F1F5F9;
-    color: #334155;
-    font-weight: 600;
-    padding: 8px;
-    border: none;
-    border-bottom: 1px solid #CBD5E1;
-    border-right: 1px solid #E2E8F0;
-}
-
-QPushButton {
-    background-color: #2563EB;
-    color: #FFFFFF;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    padding: 7px 14px;
-}
-QPushButton:hover {
-    background-color: #1D4ED8;
-}
-QPushButton:pressed {
-    background-color: #1E40AF;
-}
-QPushButton#SecondaryBtn {
-    background-color: #F1F5F9;
-    color: #334155;
-    border: 1px solid #CBD5E1;
-}
-QPushButton#SecondaryBtn:hover {
-    background-color: #E2E8F0;
-}
-QPushButton#DangerBtn {
-    background-color: #EF4444;
-    color: #FFFFFF;
-}
-QPushButton#DangerBtn:hover {
-    background-color: #DC2626;
-}
-QPushButton#SuccessBtn {
-    background-color: #16A34A;
-    color: #FFFFFF;
-    font-size: 14px;
-    padding: 11px 24px;
-    border-radius: 8px;
-}
-QPushButton#SuccessBtn:hover {
-    background-color: #15803D;
-}
-
-QProgressBar {
-    border: 1px solid #CBD5E1;
-    border-radius: 6px;
-    background-color: #F1F5F9;
-    text-align: center;
-    font-weight: 600;
-    color: #0F172A;
-    height: 22px;
-}
-QProgressBar::chunk {
-    background-color: #16A34A;
-    border-radius: 5px;
-}
-"""
 
 
 def set_hint_and_tooltip(widget, hint_text: str, is_default_value: bool = False):
@@ -359,35 +189,40 @@ class DocumentsWidget(QWidget):
 
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(8, 12, 16, 12)
+        root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(10)
 
-        banner = QFrame()
-        banner.setObjectName("HeaderBanner")
-        banner_layout = QHBoxLayout(banner)
-        title_box = QVBoxLayout()
-        lbl_title = QLabel("Документы")
-        lbl_title.setObjectName("HeaderTitle")
-        lbl_sub = QLabel(
-            "Подготовка комплектов документов для регистрации программ ЭВМ"
-        )
-        lbl_sub.setObjectName("HeaderSubtitle")
-        title_box.addWidget(lbl_title)
-        title_box.addWidget(lbl_sub)
-        banner_layout.addLayout(title_box)
-        root_layout.addWidget(banner)
-
-        data_label = QLabel(f"База авторов: {self.paths.db_path}")
-        data_label.setTextFormat(Qt.TextFormat.PlainText)
-        data_label.setWordWrap(True)
-        data_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root_layout.addWidget(data_label)
+        database_bar = QFrame()
+        database_bar.setObjectName("DatabaseBar")
+        database_layout = QHBoxLayout(database_bar)
+        database_layout.setContentsMargins(14, 9, 12, 9)
+        database_layout.setSpacing(10)
+        database_layout.addWidget(QLabel("База авторов:"))
+        database_path = QLineEdit(str(self.paths.db_path))
+        database_path.setReadOnly(True)
+        database_path.setToolTip(str(self.paths.db_path))
+        database_layout.addWidget(database_path, 1)
+        open_database_folder = QPushButton()
+        open_database_folder.setObjectName("SecondaryBtn")
+        open_database_folder.setIcon(section_icon("folder"))
+        open_database_folder.setFixedWidth(42)
+        open_database_folder.setToolTip("Открыть папку базы авторов")
+        open_database_folder.clicked.connect(lambda: open_folder_in_explorer(str(self.paths.db_path.parent)))
+        database_layout.addWidget(open_database_folder)
+        status = QLabel("●  База подключена")
+        status.setObjectName("DatabaseStatus")
+        database_layout.addWidget(status)
+        root_layout.addWidget(database_bar)
 
         self.tabs = QTabWidget()
         self.tab_authors = QWidget()
         self.tab_modules = QWidget()
+        modules_scroll = QScrollArea()
+        modules_scroll.setWidgetResizable(True)
+        modules_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        modules_scroll.setWidget(self.tab_modules)
         self.tabs.addTab(self.tab_authors, "👤 1. База авторов")
-        self.tabs.addTab(self.tab_modules, "📦 2. Модули, авторы и генерация документов")
+        self.tabs.addTab(modules_scroll, "📦 2. Модули, авторы и генерация документов")
         root_layout.addWidget(self.tabs, stretch=1)
 
         self._build_authors_tab()
@@ -437,8 +272,9 @@ class DocumentsWidget(QWidget):
         left_vbox.addLayout(btn_row_left)
 
         right_group = QGroupBox("Карточка автора (добавление / редактирование)")
-        right_group.setMinimumWidth(600)
+        right_group.setMinimumWidth(540)
         form = QFormLayout(right_group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setVerticalSpacing(8)
         form.setHorizontalSpacing(12)
 
@@ -536,9 +372,9 @@ class DocumentsWidget(QWidget):
         self.inp_pass_code.setFixedWidth(110)
         self.inp_pass_code.textEdited.connect(self._on_pass_code_edited)
 
-        pass_hbox2.addWidget(QLabel("Дата выдачи:"))
+        pass_hbox2.addWidget(QLabel("Дата:"))
         pass_hbox2.addWidget(self.inp_pass_date)
-        pass_hbox2.addWidget(QLabel("Код подразд.:"))
+        pass_hbox2.addWidget(QLabel("Код:"))
         pass_hbox2.addWidget(self.inp_pass_code)
         pass_hbox2.addStretch()
 
@@ -566,16 +402,18 @@ class DocumentsWidget(QWidget):
             "Выберите изображение подписи (.png на прозрачном фоне) для автоматической вставки в Согласия"
         )
         btn_pick_png.clicked.connect(self._pick_signature_png)
-        btn_clear_png = QPushButton("✖")
+        self.btn_pick_png = btn_pick_png
+        btn_clear_png = QPushButton("×")
+        self.btn_clear_png = btn_clear_png
         btn_clear_png.setObjectName("SecondaryBtn")
         btn_clear_png.setFixedWidth(32)
         btn_clear_png.setToolTip("Открепить картинку подписи .png")
         btn_clear_png.clicked.connect(self._clear_signature_png)
-        self.lbl_sig_png = QLabel("Не выбрана")
+        self.lbl_sig_png = ElidedLabel("Не выбрана")
         self.lbl_sig_png.setStyleSheet("color: #64748B;")
-        sig_png_hbox.addWidget(btn_pick_png)
+        sig_png_hbox.addWidget(btn_pick_png, stretch=1)
+        sig_png_hbox.addWidget(self.lbl_sig_png)
         sig_png_hbox.addWidget(btn_clear_png)
-        sig_png_hbox.addWidget(self.lbl_sig_png, stretch=1)
 
         sig_pfx_widget = QWidget()
         sig_pfx_hbox = QHBoxLayout(sig_pfx_widget)
@@ -587,16 +425,18 @@ class DocumentsWidget(QWidget):
             "Сохраняет PFX в карточке автора. Электронное подписание документов не выполняется."
         )
         btn_pick_pfx.clicked.connect(self._pick_signature_pfx)
-        btn_clear_pfx = QPushButton("✖")
+        self.btn_pick_pfx = btn_pick_pfx
+        btn_clear_pfx = QPushButton("×")
+        self.btn_clear_pfx = btn_clear_pfx
         btn_clear_pfx.setObjectName("SecondaryBtn")
         btn_clear_pfx.setFixedWidth(32)
         btn_clear_pfx.setToolTip("Открепить файл .pfx")
         btn_clear_pfx.clicked.connect(self._clear_signature_pfx)
-        self.lbl_sig_pfx = QLabel("Не выбрана")
+        self.lbl_sig_pfx = ElidedLabel("Не выбрана")
         self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
-        sig_pfx_hbox.addWidget(btn_pick_pfx)
+        sig_pfx_hbox.addWidget(btn_pick_pfx, stretch=1)
+        sig_pfx_hbox.addWidget(self.lbl_sig_pfx)
         sig_pfx_hbox.addWidget(btn_clear_pfx)
-        sig_pfx_hbox.addWidget(self.lbl_sig_pfx, stretch=1)
 
         form.addRow("Полное ФИО:*", self.inp_fio)
         form.addRow("Дата рождения:*", dob_widget)
@@ -616,7 +456,12 @@ class DocumentsWidget(QWidget):
         form.addRow("", self.btn_save_author)
 
         splitter.addWidget(left_group)
-        splitter.addWidget(right_group)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        form_scroll.setMinimumWidth(560)
+        form_scroll.setWidget(right_group)
+        splitter.addWidget(form_scroll)
         splitter.setSizes([660, 660])
         layout.addWidget(splitter)
 
@@ -732,8 +577,9 @@ class DocumentsWidget(QWidget):
         self.date_sign.setToolTip("Дата подписи документов (в согласия подставится в формате ДД.ММ.ГГГГг.)")
 
         self.chk_convert_pdf = QCheckBox(
-            "Также автоматически конвертировать созданные документы в PDF (с уже вставленными подписями авторов)"
+            "Также создать PDF через Microsoft Word"
         )
+        self.chk_convert_pdf.setToolTip("Конвертировать созданные DOCX в PDF с уже вставленными PNG-подписями авторов")
 
         opt_hbox.addWidget(QLabel("📅 Дата подписи:"))
         opt_hbox.addWidget(self.date_sign)
@@ -811,11 +657,13 @@ class DocumentsWidget(QWidget):
         if file_path:
             self.current_sig_png_path = file_path
             self.lbl_sig_png.setText(f"✅ {Path(file_path).name}")
+            self.lbl_sig_png.setToolTip(file_path)
             self.lbl_sig_png.setStyleSheet("color: #16A34A; font-weight: 600;")
 
     def _clear_signature_png(self):
         self.current_sig_png_path = ""
         self.lbl_sig_png.setText("Не выбрана")
+        self.lbl_sig_png.setToolTip("")
         self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
     def _pick_signature_pfx(self):
@@ -825,11 +673,13 @@ class DocumentsWidget(QWidget):
         if file_path:
             self.current_sig_pfx_path = file_path
             self.lbl_sig_pfx.setText(f"🔐 {Path(file_path).name}")
+            self.lbl_sig_pfx.setToolTip(file_path)
             self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
 
     def _clear_signature_pfx(self):
         self.current_sig_pfx_path = ""
         self.lbl_sig_pfx.setText("Не выбрана")
+        self.lbl_sig_pfx.setToolTip("")
         self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
 
     # --------------------------------------------------------------------------
@@ -920,16 +770,18 @@ class DocumentsWidget(QWidget):
         self.inp_contribution.setText(author["contribution"])
 
         self.current_sig_png_path = author.get("signature_png", "")
+        self.lbl_sig_png.setToolTip(str(self.db.resolve_signature_path(self.current_sig_png_path)) if self.current_sig_png_path else "")
         if self.current_sig_png_path and self.db.resolve_signature_path(self.current_sig_png_path).exists():
-            self.lbl_sig_png.setText(f"✅ {Path(self.current_sig_png_path).name}")
+            self.lbl_sig_png.setText(f"✅ {self.db.resolve_signature_path(self.current_sig_png_path).name}")
             self.lbl_sig_png.setStyleSheet("color: #16A34A; font-weight: 600;")
         else:
             self.lbl_sig_png.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_png_path else "Не выбрана")
             self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
         self.current_sig_pfx_path = author.get("signature_pfx", "")
+        self.lbl_sig_pfx.setToolTip(str(self.db.resolve_signature_path(self.current_sig_pfx_path)) if self.current_sig_pfx_path else "")
         if self.current_sig_pfx_path and self.db.resolve_signature_path(self.current_sig_pfx_path).exists():
-            self.lbl_sig_pfx.setText(f"🔐 {Path(self.current_sig_pfx_path).name}")
+            self.lbl_sig_pfx.setText(f"🔐 {self.db.resolve_signature_path(self.current_sig_pfx_path).name}")
             self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
         else:
             self.lbl_sig_pfx.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_pfx_path else "Не выбрана")
@@ -1352,30 +1204,44 @@ class DocumentsWidget(QWidget):
 class AutomatDocsWindow(QMainWindow):
     def __init__(self, icon_path: Path | None = None, paths: AppPaths | None = None):
         super().__init__()
-        self.setWindowTitle("Automat docs — Автоматизация документов")
-        self.resize(1500, 900)
-        if icon_path and icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+        self.resize(1600, 940)
+        self.setStyleSheet(MODERN_QSS)
         self._close_when_finished = False
 
         central = QWidget()
+        central.setObjectName("AppSurface")
         layout = QHBoxLayout(central)
-        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setContentsMargins(8, 8, 12, 8)
+        layout.setSpacing(16)
         self.setCentralWidget(central)
-        self.navigation = QListWidget()
-        self.navigation.setObjectName("Navigation")
-        self.navigation.setFixedWidth(155)
-        self.navigation.addItem("Документы")
-        self.navigation.setAccessibleName("Разделы приложения")
+        self.sidebar = Sidebar()
+        self.navigation = self.sidebar.navigation
+        layout.addWidget(self.sidebar)
+        workspace = QVBoxLayout()
+        workspace.setSpacing(12)
+        self.banner = HeroBanner()
+        workspace.addWidget(self.banner)
         self.stack = QStackedWidget()
         # Экран создаётся один раз: переключение сохраняет формы и таблицы.
         self.documents = DocumentsWidget(paths or resolve_paths())
         self.stack.addWidget(self.documents)
-        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex)
+        for section in SECTIONS[1:]:
+            self.stack.addWidget(PlannedSection(section))
+        self.navigation.currentRowChanged.connect(self._on_section_changed)
         self.navigation.setCurrentRow(0)
         self.documents.generation_stopped.connect(self._on_generation_stopped)
-        layout.addWidget(self.navigation)
-        layout.addWidget(self.stack, stretch=1)
+        workspace.addWidget(self.stack, stretch=1)
+        layout.addLayout(workspace, stretch=1)
+
+    def _on_section_changed(self, index: int):
+        if not 0 <= index < len(SECTIONS):
+            return
+        section = SECTIONS[index]
+        self.stack.setCurrentIndex(index)
+        self.banner.set_section(section)
+        self.sidebar.set_section(section)
+        self.setWindowTitle(f"{APP_NAME} (Octopus) — {section.caption}")
+        self.setWindowIcon(section_icon(section.key))
 
     def closeEvent(self, event):
         if self.documents.worker is not None:
@@ -1454,7 +1320,7 @@ def select_startup_paths(options) -> AppPaths | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Automat docs — подготовка документов")
+    parser = argparse.ArgumentParser(description="Осьминог (Octopus) — работа с документами")
     parser.add_argument("--project-dir", help="Папка проекта с существующими данными и шаблонами")
     parser.add_argument("--data-dir", help="Папка данных: database/, signatures/, output/")
     parser.add_argument("--db-path", help="Путь к существующей базе SQLite (без переноса)")
@@ -1475,6 +1341,7 @@ def main():
             pass
 
     app = QApplication([sys.argv[0], *qt_args])
+    app.setApplicationDisplayName(f"{APP_NAME} (Octopus)")
     app.setStyleSheet(MODERN_QSS)
 
     paths = select_startup_paths(options)
