@@ -94,6 +94,8 @@ class GuiTests(unittest.TestCase):
         self.window.navigation.setCurrentRow(1)
         self.assertNotEqual(document_icon, self.window.windowIcon().pixmap(64, 64).toImage())
         self.assertNotEqual(document_avatar, self.window.sidebar.avatar.pixmap().toImage())
+        self.assertIs(self.window.stack.currentWidget(), self.window.ocr)
+        self.window.navigation.setCurrentRow(2)
         self.assertIn("Пока доступен макет", self.window.stack.currentWidget().notice.text())
 
     def test_signature_clear_buttons_align_and_preserve_choice(self):
