@@ -53,7 +53,7 @@ def main(argv=None):
                 raise ValueError("Не выбраны PDF-файлы.")
             cancel_path = Path(request["cancel_path"])
             settings = OcrSettings(Path(request["model_dir"]), bool(request.get("gpu", False)),
-                                   int(request.get("dpi", 200)))
+                                   int(request.get("dpi", 200)), bool(request.get("preserve_layout", False)))
             result = process_batch(files, Path(request["output_dir"]), settings,
                                    on_event=emit, cancelled=cancel_path.exists)
         return 1 if result["status"] == "failed" else 0

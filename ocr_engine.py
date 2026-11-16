@@ -13,6 +13,7 @@ class OcrSettings:
     model_dir: Path
     gpu: bool = False
     dpi: int = 200
+    preserve_layout: bool = False
 
 
 class Cancelled(Exception):
@@ -80,6 +81,14 @@ class EasyOcrBackend:
         lines = self.reader.readtext(image, detail=0, paragraph=True, workers=0, batch_size=1)
         return "\n".join(str(line) for line in lines)
 
+    def recognize_layout(self, image):
+        if self.cancelled():
+            raise Cancelled()
+        self.load()
+        if self.cancelled():
+            raise Cancelled()
+        return self.reader.readtext(image, detail=1, paragraph=False, workers=0, batch_size=1)
+
 
 def page_method(page, text: str) -> str:
     letters = sum(char.isalnum() for char in text)
@@ -106,15 +115,20 @@ def export_results(folder: Path, manifest: dict, cancelled=lambda: False):
     partial = manifest["status"] != "completed"
     stem = "result-partial" if partial else "result"
     document = Document()
-    document.add_heading("Результат распознавания", 0)
+    preserve_layout = manifest.get("preserve_layout", False)
+    if not preserve_layout:
+        document.add_heading("Результат распознавания", 0)
+    layout_pages = 0
     chunks = []
     if partial:
-        notice = "НЕПОЛНЫЙ РЕЗУЛЬТАТ: обработка отменена или часть файлов/страниц завершилась с ошибкой."
-        document.add_paragraph(notice)
+        notice = "НЕПОЛНЫЙ РЕЗУЛЬТАТ: обработка отменена, возникли ошибки или не восстановлена часть вёрстки."
+        if not preserve_layout:
+            document.add_paragraph(notice)
         chunks.append(notice)
     for file_result in manifest["files"]:
         heading = f"Файл {file_result['index']}: {file_result['name']}"
-        document.add_heading(clean_xml_text(heading), 1)
+        if not preserve_layout:
+            document.add_heading(clean_xml_text(heading), 1)
         chunks.extend(["", heading])
         if file_result.get("error"):
             message = "Ошибка файла: " + file_result["error"]
@@ -122,13 +136,26 @@ def export_results(folder: Path, manifest: dict, cancelled=lambda: False):
             chunks.append(message)
         for page in file_result["pages"]:
             heading = f"Страница {page['number']}"
-            document.add_heading(heading, 2)
+            if not preserve_layout:
+                document.add_heading(heading, 2)
             text = (folder / page["text_file"]).read_text(encoding="utf-8") if page.get("text_file") else ""
             if page.get("error"):
                 text = "Ошибка страницы: " + page["error"]
             elif not text.strip():
                 text = "[Текст не обнаружен]"
-            document.add_paragraph(clean_xml_text(text))
+            if preserve_layout:
+                from ocr_layout import write_page
+                if page.get("layout_file") and not page.get("error"):
+                    layout = json.loads((folder / page["layout_file"]).read_text(encoding="utf-8"))
+                else:
+                    layout = {"width": 595, "height": 842, "blocks": [{"kind": "text", "bbox": [36,60,559,80], "text": text}]}
+                marker = f"Файл {file_result['index']}: {file_result['name']} · Страница {page['number']}"
+                if partial:
+                    marker = "НЕПОЛНЫЙ РЕЗУЛЬТАТ · " + marker
+                write_page(document, layout, marker, first_page=layout_pages == 0)
+                layout_pages += 1
+            else:
+                document.add_paragraph(clean_xml_text(text))
             chunks.extend([heading, text])
     text_path = folder / f"{stem}.txt"
     atomic_text(text_path, "\n".join(chunks))
@@ -164,6 +191,7 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
     emit = on_event or (lambda event: None)
     manifest = {"version": 1, "status": "running", "files": [], "pages_total": 0,
                 "pages_done": 0, "errors": 0, "text_path": "", "docx_path": ""}
+    manifest.update(preserve_layout=settings.preserve_layout, layout_warnings=0)
     paths = [Path(path).resolve() for path in files]
     manifest["files"] = [
         {"index": index, "name": path.name, "source": str(path), "page_count": 0,
@@ -217,6 +245,7 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                         progress("page_started", file=row, page=number, pages=item["page_count"],
                                  done=manifest["pages_done"], total=manifest["pages_total"])
                         result = {"number": number, "method": "", "text_file": "", "error": ""}
+                        layout = None
                         try:
                             text = page.get_text("text", sort=True)
                             result["method"] = page_method(page, text)
@@ -229,7 +258,31 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                                 import numpy as np
                                 image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, 3)
                                 check_cancel()
-                                text = backend.recognize(image)
+                                if settings.preserve_layout:
+                                    tokens = backend.recognize_layout(image)
+                                    text = "\n".join(str(token[1]) for token in tokens)
+                                    try:
+                                        from ocr_layout import scan_layout
+                                        layout = scan_layout(image, tokens, page.rect.width, page.rect.height)
+                                    except Exception as exc:
+                                        result["layout_warning"] = f"Не восстановлена структура скана: {exc}"
+                                else:
+                                    text = backend.recognize(image)
+                            elif settings.preserve_layout:
+                                try:
+                                    from ocr_layout import native_layout
+                                    layout = native_layout(page)
+                                except Exception as exc:
+                                    result["layout_warning"] = f"Не восстановлена структура PDF: {exc}"
+                            if settings.preserve_layout:
+                                if layout is None:
+                                    layout = {"width": page.rect.width, "height": page.rect.height,
+                                              "blocks": [{"kind":"text", "bbox":[36,60,page.rect.width-36,80], "text":text}]}
+                                layout_path = f"pages/{item['index']:04d}_{number:05d}.layout.json"
+                                atomic_text(folder / layout_path, json.dumps(layout, ensure_ascii=False))
+                                result["layout_file"] = layout_path
+                                if result.get("layout_warning"):
+                                    manifest["layout_warnings"] += 1
                             check_cancel()
                             relative = f"pages/{item['index']:04d}_{number:05d}.txt"
                             atomic_text(folder / relative, text)
@@ -244,14 +297,14 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                         save_manifest(folder, manifest)
                         progress("page_finished", file=row, page=number, method=result["method"],
                                  error=result["error"], done=manifest["pages_done"], total=manifest["pages_total"])
-                item["status"] = "partial" if any(p["error"] for p in item["pages"]) else "completed"
+                item["status"] = "partial" if any(p["error"] or p.get("layout_warning") for p in item["pages"]) else "completed"
             except Cancelled:
                 raise
             except Exception as exc:
                 item.update(status="error", error=str(exc)[:1200])
                 manifest["errors"] += 1
             progress("file_finished", file=row, status=item["status"], error=item["error"])
-        manifest["status"] = "partial" if manifest["errors"] else "completed"
+        manifest["status"] = "partial" if manifest["errors"] or manifest["layout_warnings"] else "completed"
     except Cancelled:
         manifest["status"] = "cancelled"
     except Exception as exc:

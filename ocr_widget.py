@@ -103,9 +103,12 @@ class OcrWidget(QWidget):
         row.addWidget(QLabel("Качество сканов:"))
         row.addWidget(self.dpi)
         grid.addLayout(row, 1, 0, 1, 3)
+        self.preserve_layout = QCheckBox("Сохранять таблицы и колонки в DOCX (приближённо)")
+        self.preserve_layout.setToolTip("Редактируемые таблицы с видимыми границами и до двух колонок. Сложная вёрстка, шрифты и иллюстрации не воспроизводятся точно.")
+        grid.addWidget(self.preserve_layout, 2, 0, 1, 3)
         hint = QLabel("Модели готовятся один раз командой ocr_setup по README. При обработке скачивания отключены.")
         hint.setWordWrap(True)
-        grid.addWidget(hint, 2, 0, 1, 3)
+        grid.addWidget(hint, 3, 0, 1, 3)
         root.addWidget(settings)
         action_row = QHBoxLayout()
         self.start_button = QPushButton("Распознать пакет")
@@ -198,6 +201,7 @@ class OcrWidget(QWidget):
                 models = self.paths.data_dir / models
             request = {"files": [str(path) for path in self.files], "output_dir": str(self.run_dir / "result"),
                        "model_dir": str(models.resolve()), "gpu": self.gpu.isChecked(), "dpi": self.dpi.value(),
+                       "preserve_layout": self.preserve_layout.isChecked(),
                        "cancel_path": str(self.run_dir / "cancel")}
             request_path = self.run_dir / "request.json"
             request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
@@ -310,9 +314,12 @@ class OcrWidget(QWidget):
                           "running": "Прервано", "pending": "Не обработан"}
                 self.table.item(row, 2).setText(states.get(item["status"], item["status"]))
                 errors = [item.get("error", "")] + [p["error"] for p in item["pages"] if p.get("error")]
+                errors += [p["layout_warning"] for p in item["pages"] if p.get("layout_warning")]
                 self.table.item(row, 2).setToolTip("\n".join(filter(None, errors)))
             if self.result.get("fatal_error"):
                 self.last_error = self.result["fatal_error"]
+            if self.result.get("layout_warnings"):
+                self.status.setText(self.status.text() + f" · предупреждений вёрстки: {self.result['layout_warnings']}")
             text_path = self.result.get("text_path")
             if text_path:
                 with (manifest_path.parent / text_path).open(encoding="utf-8") as stream:
