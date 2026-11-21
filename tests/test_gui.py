@@ -11,7 +11,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QDate, QEventLoop, QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea
 
 from app_paths import AmbiguousDatabaseError, resolve_paths
 from main import AutomatDocsWindow, GenerationWorker, select_startup_paths
@@ -91,9 +91,11 @@ class GuiTests(unittest.TestCase):
             self.assertIn("Осьминог (Octopus)", self.window.windowTitle())
             self.assertIn(section.caption, self.window.windowTitle())
             self.assertEqual(self.window.stack.currentIndex(), index)
+            self.assertEqual(document_icon, self.window.windowIcon().pixmap(64, 64).toImage())
+            self.assertEqual(document_icon, self.app.windowIcon().pixmap(64, 64).toImage())
+            self.assertEqual(document_avatar, self.window.sidebar.avatar.pixmap().toImage())
         self.window.navigation.setCurrentRow(1)
-        self.assertNotEqual(document_icon, self.window.windowIcon().pixmap(64, 64).toImage())
-        self.assertNotEqual(document_avatar, self.window.sidebar.avatar.pixmap().toImage())
+        self.assertFalse(self.window.windowIcon().isNull())
         self.assertIs(self.window.stack.currentWidget(), self.window.ocr)
         self.window.navigation.setCurrentRow(2)
         self.assertIs(self.window.stack.currentWidget(), self.window.text)
@@ -109,13 +111,10 @@ class GuiTests(unittest.TestCase):
             self.docs.lbl_sig_png.setText("Очень_длинное_имя_подписи_" * 12 + ".png")
             self.app.processEvents()
             png = self.docs.btn_clear_png
-            pfx = self.docs.btn_clear_pfx
             right = self.docs.inp_contribution.mapTo(self.docs, self.docs.inp_contribution.rect().topRight()).x()
             self.assertEqual(png.mapTo(self.docs, png.rect().topRight()).x(), right)
-            self.assertEqual(pfx.mapTo(self.docs, pfx.rect().topRight()).x(), right)
             for picker, label, clear in (
                 (self.docs.btn_pick_png, self.docs.lbl_sig_png, png),
-                (self.docs.btn_pick_pfx, self.docs.lbl_sig_pfx, pfx),
             ):
                 self.assertLess(picker.geometry().right(), label.geometry().left())
                 self.assertLess(label.geometry().right(), clear.geometry().left())
@@ -123,8 +122,41 @@ class GuiTests(unittest.TestCase):
         self.docs.btn_clear_png.click()
         self.assertEqual(self.docs.current_sig_png_path, "")
         self.assertTrue(self.docs.current_sig_pfx_path)
-        self.docs.btn_clear_pfx.click()
-        self.assertEqual(self.docs.current_sig_pfx_path, "")
+
+    def test_author_form_has_no_pfx_or_contribution_column_and_preserves_legacy_data(self):
+        self.docs.tbl_authors.selectRow(0)
+        old = self.docs.db.get_all_authors()[0]
+        self.assertEqual(self.docs.tbl_authors.columnCount(), 5)
+        headers = [self.docs.tbl_authors.horizontalHeaderItem(i).text() for i in range(5)]
+        self.assertNotIn("Творческий вклад", headers)
+        self.assertFalse(any("ЭЦП" in button.text() or "pfx" in button.text().lower()
+                             for button in self.docs.findChildren(QPushButton)))
+        self.assertNotIn("PFX", self.docs.tbl_authors.item(0,4).text())
+        self.docs.inp_contribution.setText("Новый творческий вклад")
+        self.docs._save_author_from_form()
+        saved = self.docs.db.get_all_authors()[0]
+        self.assertEqual(saved["contribution"], "Новый творческий вклад")
+        self.assertEqual(saved["signature_pfx"], old["signature_pfx"])
+        self.assertEqual(self.docs.db.resolve_signature_path(saved["signature_pfx"]).read_bytes(),
+                         b"SYNTHETIC: NOT A CERTIFICATE")
+
+    def test_all_screens_fit_without_page_scrolling_at_laptop_size(self):
+        for width, height in ((1366,700), (1366,768), (1920,1080)):
+            self.window.resize(width,height)
+            self.app.processEvents()
+            self.assertEqual((self.window.width(), self.window.height()), (width,height))
+            for index in range(self.window.stack.count()):
+                self.window.navigation.setCurrentRow(index)
+                for tab in ((0,1) if index == 0 else (None,)):
+                    if tab is not None:
+                        self.docs.tabs.setCurrentIndex(tab)
+                    self.app.processEvents()
+                    page=self.window.stack.currentWidget()
+                    scrolls=([page] if isinstance(page,QScrollArea) else []) + page.findChildren(QScrollArea)
+                    for scroll in scrolls:
+                        if scroll.isVisible():
+                            self.assertEqual(scroll.verticalScrollBar().maximum(),0,(width,height,index,tab))
+                            self.assertEqual(scroll.horizontalScrollBar().maximum(),0,(width,height,index,tab))
 
     def test_gui_generates_six_documents_and_refreshes_pages(self):
         self.docs.modules_data[0]["listing_text"] = "\n".join("print('тест')" for _ in range(150))

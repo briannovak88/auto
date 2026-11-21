@@ -50,7 +50,7 @@ def main(argv=None):
             request = json.loads(args.request.read_text(encoding="utf-8"))
             files = request["files"]
             if not files:
-                raise ValueError("Не выбраны PDF-файлы.")
+                raise ValueError("Не выбраны файлы PDF, JPG или PNG.")
             cancel_path = Path(request["cancel_path"])
             settings = OcrSettings(Path(request["model_dir"]), bool(request.get("gpu", False)),
                                    int(request.get("dpi", 200)), bool(request.get("preserve_layout", False)))

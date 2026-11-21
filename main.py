@@ -15,7 +15,7 @@ if __name__ == "__main__":
         sys.exit(ocr_worker_main(sys.argv[2:]))
 
 from PyQt6.QtCore import QDate, QThread, QTimer, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QIcon
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -57,7 +57,7 @@ from generator import (
 )
 from ui_shell import (
     APP_NAME, MODERN_QSS, SECTIONS, ElidedLabel, HeroBanner,
-    PlannedSection, Sidebar, section_icon,
+    PlannedSection, Sidebar, application_icon, section_icon,
 )
 from ocr_widget import OcrWidget
 from text_widget import TextWidget
@@ -243,23 +243,22 @@ class DocumentsWidget(QWidget):
     # --------------------------------------------------------------------------
     def _build_authors_tab(self):
         layout = QHBoxLayout(self.tab_authors)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left_group = QGroupBox("Список сохраненных авторов в локальной БД")
         left_vbox = QVBoxLayout(left_group)
 
-        self.tbl_authors = QTableWidget(0, 6)
+        self.tbl_authors = QTableWidget(0, 5)
         self.tbl_authors.setHorizontalHeaderLabels([
-            "ID", "ФИО автора", "Дата рожд.", "Телефон", "Подпись", "Творческий вклад"
+            "ID", "ФИО автора", "Дата рожд.", "Телефон", "Подпись"
         ])
         self.tbl_authors.verticalHeader().setVisible(False)
         self.tbl_authors.setAlternatingRowColors(True)
         self.tbl_authors.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tbl_authors.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tbl_authors.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.tbl_authors.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.tbl_authors.setColumnWidth(0, 42)
         self.tbl_authors.setColumnWidth(2, 90)
         self.tbl_authors.setColumnWidth(3, 135)
@@ -268,11 +267,12 @@ class DocumentsWidget(QWidget):
         left_vbox.addWidget(self.tbl_authors)
 
         btn_row_left = QHBoxLayout()
-        btn_new_author = QPushButton("➕ Новый автор (очистить форму)")
+        btn_new_author = QPushButton("➕ Новый автор")
+        btn_new_author.setToolTip("Очистить форму для добавления нового автора")
         btn_new_author.setObjectName("SecondaryBtn")
         btn_new_author.clicked.connect(self._clear_author_form)
 
-        btn_del_author = QPushButton("🗑 Удалить выбранного автора")
+        btn_del_author = QPushButton("🗑 Удалить автора")
         btn_del_author.setObjectName("DangerBtn")
         btn_del_author.clicked.connect(self._delete_selected_author)
 
@@ -285,7 +285,7 @@ class DocumentsWidget(QWidget):
         right_group.setMinimumWidth(540)
         form = QFormLayout(right_group)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setVerticalSpacing(8)
+        form.setVerticalSpacing(6)
         form.setHorizontalSpacing(12)
 
         self.inp_fio = QLineEdit()
@@ -332,7 +332,7 @@ class DocumentsWidget(QWidget):
             self.inp_address,
             "Российская Федерация, 196605, г. Санкт-Петербург, г. Пушкин, ул. Ленинградская, д. 93/3, кв. 54",
         )
-        self.inp_address.setFixedHeight(52)
+        self.inp_address.setFixedHeight(44)
 
         pass_row1 = QWidget()
         pass_hbox1 = QHBoxLayout(pass_row1)
@@ -425,29 +425,6 @@ class DocumentsWidget(QWidget):
         sig_png_hbox.addWidget(self.lbl_sig_png)
         sig_png_hbox.addWidget(btn_clear_png)
 
-        sig_pfx_widget = QWidget()
-        sig_pfx_hbox = QHBoxLayout(sig_pfx_widget)
-        sig_pfx_hbox.setContentsMargins(0, 0, 0, 0)
-        sig_pfx_hbox.setSpacing(8)
-        btn_pick_pfx = QPushButton("🔐 Добавить ЭЦП (.pfx)")
-        btn_pick_pfx.setObjectName("SecondaryBtn")
-        btn_pick_pfx.setToolTip(
-            "Сохраняет PFX в карточке автора. Электронное подписание документов не выполняется."
-        )
-        btn_pick_pfx.clicked.connect(self._pick_signature_pfx)
-        self.btn_pick_pfx = btn_pick_pfx
-        btn_clear_pfx = QPushButton("×")
-        self.btn_clear_pfx = btn_clear_pfx
-        btn_clear_pfx.setObjectName("SecondaryBtn")
-        btn_clear_pfx.setFixedWidth(32)
-        btn_clear_pfx.setToolTip("Открепить файл .pfx")
-        btn_clear_pfx.clicked.connect(self._clear_signature_pfx)
-        self.lbl_sig_pfx = ElidedLabel("Не выбрана")
-        self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
-        sig_pfx_hbox.addWidget(btn_pick_pfx, stretch=1)
-        sig_pfx_hbox.addWidget(self.lbl_sig_pfx)
-        sig_pfx_hbox.addWidget(btn_clear_pfx)
-
         form.addRow("Полное ФИО:*", self.inp_fio)
         form.addRow("Дата рождения:*", dob_widget)
         form.addRow("Гражданство:*", self.inp_citizenship)
@@ -459,7 +436,6 @@ class DocumentsWidget(QWidget):
         form.addRow("Email (Заявл.):", self.inp_email)
         form.addRow("Творческий вклад:*", self.inp_contribution)
         form.addRow("Подпись-картинка:", sig_png_widget)
-        form.addRow("Файл ЭЦП (.pfx):", sig_pfx_widget)
 
         self.btn_save_author = QPushButton("💾 Сохранить автора в БД")
         self.btn_save_author.clicked.connect(self._save_author_from_form)
@@ -480,24 +456,25 @@ class DocumentsWidget(QWidget):
     # --------------------------------------------------------------------------
     def _build_modules_tab(self):
         vbox = QVBoxLayout(self.tab_modules)
-        vbox.setContentsMargins(14, 14, 14, 14)
-        vbox.setSpacing(12)
+        vbox.setContentsMargins(6, 6, 6, 6)
+        vbox.setSpacing(6)
 
         toolbar_group = QGroupBox("Шаг 1. Загрузка списка модулей (программ для ЭВМ)")
         tb_layout = QHBoxLayout(toolbar_group)
 
-        btn_load_folder = QPushButton("📁 Загрузить из папки с листингами (.docx / .pdf)")
+        btn_load_folder = QPushButton("📁 Из папки листингов…")
+        btn_load_folder.setToolTip("Загрузить модули из папки с листингами .docx / .pdf")
         btn_load_folder.clicked.connect(self._load_modules_from_folder)
 
-        btn_load_excel = QPushButton("📊 Импорт списка из Excel (.xlsx)")
+        btn_load_excel = QPushButton("📊 Импорт Excel…")
         btn_load_excel.setObjectName("SecondaryBtn")
         btn_load_excel.clicked.connect(self._load_modules_from_excel)
 
-        btn_add_manual = QPushButton("➕ Добавить модуль вручную")
+        btn_add_manual = QPushButton("➕ Добавить модуль")
         btn_add_manual.setObjectName("SecondaryBtn")
         btn_add_manual.clicked.connect(self._add_module_manually)
 
-        btn_del_module = QPushButton("🗑 Удалить выбранный")
+        btn_del_module = QPushButton("🗑 Удалить")
         btn_del_module.setObjectName("SecondaryBtn")
         btn_del_module.clicked.connect(self._remove_selected_module)
 
@@ -515,7 +492,8 @@ class DocumentsWidget(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        mod_group = QGroupBox("Список модулей программы (название и число листов можно редактировать двойным кликом)")
+        mod_group = QGroupBox("Список модулей программы")
+        mod_group.setToolTip("Название и число листов можно редактировать двойным кликом")
         mod_vbox = QVBoxLayout(mod_group)
         self.tbl_modules = QTableWidget(0, 5)
         self.tbl_modules.setHorizontalHeaderLabels([
@@ -552,7 +530,7 @@ class DocumentsWidget(QWidget):
         main_auth_row.addWidget(self.cmb_main_author, stretch=1)
         auth_sel_vbox.addLayout(main_auth_row)
 
-        btn_apply_all = QPushButton("☑️ Применить выбранных авторов ко ВСЕМ модулям")
+        btn_apply_all = QPushButton("☑️ Применить авторов ко всем модулям")
         btn_apply_all.setObjectName("SecondaryBtn")
         btn_apply_all.clicked.connect(self._apply_authors_to_all_modules)
         auth_sel_vbox.addWidget(btn_apply_all)
@@ -609,14 +587,16 @@ class DocumentsWidget(QWidget):
         gen_grid.addWidget(self.inp_templates_dir, 0, 1)
         gen_grid.addWidget(btn_browse_tpl, 0, 2)
 
-        gen_grid.addWidget(QLabel("Папка сохранения:"), 1, 0)
-        gen_grid.addWidget(self.inp_output_dir, 1, 1)
-        gen_grid.addWidget(btn_browse_out, 1, 2)
+        gen_grid.addWidget(QLabel("Папка сохранения:"), 0, 3)
+        gen_grid.addWidget(self.inp_output_dir, 0, 4)
+        gen_grid.addWidget(btn_browse_out, 0, 5)
+        gen_grid.setColumnStretch(1, 1)
+        gen_grid.setColumnStretch(4, 1)
 
-        gen_grid.addWidget(options_row, 2, 0, 1, 2)
-        gen_grid.addWidget(self.btn_generate, 2, 2, 2, 1)
-        gen_grid.addWidget(self.progress_bar, 3, 0, 1, 2)
-        gen_grid.addWidget(self.lbl_status, 4, 0, 1, 3)
+        gen_grid.addWidget(options_row, 1, 0, 1, 4)
+        gen_grid.addWidget(self.btn_generate, 1, 4, 1, 2)
+        gen_grid.addWidget(self.progress_bar, 2, 0, 1, 4)
+        gen_grid.addWidget(self.lbl_status, 2, 4, 1, 2)
 
         vbox.addWidget(gen_group)
         self._generation_controls = [
@@ -676,22 +656,6 @@ class DocumentsWidget(QWidget):
         self.lbl_sig_png.setToolTip("")
         self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
-    def _pick_signature_pfx(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Выберите файл сертификата ЭЦП (.pfx)", "", "PFX Certificates (*.pfx *.p12)"
-        )
-        if file_path:
-            self.current_sig_pfx_path = file_path
-            self.lbl_sig_pfx.setText(f"🔐 {Path(file_path).name}")
-            self.lbl_sig_pfx.setToolTip(file_path)
-            self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
-
-    def _clear_signature_pfx(self):
-        self.current_sig_pfx_path = ""
-        self.lbl_sig_pfx.setText("Не выбрана")
-        self.lbl_sig_pfx.setToolTip("")
-        self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
-
     # --------------------------------------------------------------------------
     # Работа с таблицей и формой авторов
     # --------------------------------------------------------------------------
@@ -701,10 +665,7 @@ class DocumentsWidget(QWidget):
         for r_idx, a in enumerate(self.authors_cache):
             dob_str = f"{a['birth_day']}.{a['birth_month']}.{a['birth_year']}"
             has_png = bool(a.get("signature_png") and self.db.resolve_signature_path(a["signature_png"]).exists())
-            has_pfx = bool(a.get("signature_pfx") and self.db.resolve_signature_path(a["signature_pfx"]).exists())
             sig_status = "🖼 PNG" if has_png else ""
-            if has_pfx:
-                sig_status = f"{sig_status} + 🔐 PFX".strip(" +")
             if not sig_status:
                 sig_status = "—"
 
@@ -714,7 +675,6 @@ class DocumentsWidget(QWidget):
                 dob_str,
                 a["phone"],
                 sig_status,
-                a["contribution"],
             ]
             for c_idx, val in enumerate(vals):
                 item = QTableWidgetItem(val)
@@ -789,14 +749,6 @@ class DocumentsWidget(QWidget):
             self.lbl_sig_png.setStyleSheet("color: #64748B;")
 
         self.current_sig_pfx_path = author.get("signature_pfx", "")
-        self.lbl_sig_pfx.setToolTip(str(self.db.resolve_signature_path(self.current_sig_pfx_path)) if self.current_sig_pfx_path else "")
-        if self.current_sig_pfx_path and self.db.resolve_signature_path(self.current_sig_pfx_path).exists():
-            self.lbl_sig_pfx.setText(f"🔐 {self.db.resolve_signature_path(self.current_sig_pfx_path).name}")
-            self.lbl_sig_pfx.setStyleSheet("color: #2563EB; font-weight: 600;")
-        else:
-            self.lbl_sig_pfx.setText("Файл недоступен (ссылка сохранена)" if self.current_sig_pfx_path else "Не выбрана")
-            self.lbl_sig_pfx.setStyleSheet("color: #64748B;")
-
         self.btn_save_author.setText(f"💾 Обновить данные автора (ID {author['id']})")
 
     def _clear_author_form(self):
@@ -817,7 +769,7 @@ class DocumentsWidget(QWidget):
         self.inp_email.clear()
         self.inp_contribution.setText("Разработка программного обеспечения.")
         self._clear_signature_png()
-        self._clear_signature_pfx()
+        self.current_sig_pfx_path = ""
         self.btn_save_author.setText("💾 Сохранить нового автора в БД")
 
     def _save_author_from_form(self):
@@ -1214,6 +1166,9 @@ class DocumentsWidget(QWidget):
 class AutomatDocsWindow(QMainWindow):
     def __init__(self, icon_path: Path | None = None, paths: AppPaths | None = None):
         super().__init__()
+        icon = application_icon(icon_path)
+        self.setWindowIcon(icon)
+        QApplication.instance().setWindowIcon(icon)
         self.resize(1600, 940)
         self.setStyleSheet(MODERN_QSS)
         self._close_when_finished = False
@@ -1259,7 +1214,6 @@ class AutomatDocsWindow(QMainWindow):
         self.banner.set_section(section)
         self.sidebar.set_section(section)
         self.setWindowTitle(f"{APP_NAME} (Octopus) — {section.caption}")
-        self.setWindowIcon(section_icon(section.key))
 
     def _receive_ocr_text(self, text):
         self.navigation.setCurrentRow(2)
@@ -1374,8 +1328,7 @@ def main():
     if paths is None:
         return 1
     icon_path = resolve_icon_path(paths)
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    app.setWindowIcon(application_icon(icon_path))
 
     try:
         window = AutomatDocsWindow(icon_path=icon_path, paths=paths)

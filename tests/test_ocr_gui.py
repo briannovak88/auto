@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, QMimeData, QPoint, QPointF, QUrl, Qt
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from app_paths import resolve_paths
 from main import AutomatDocsWindow
@@ -126,6 +127,54 @@ class OcrGuiTests(unittest.TestCase):
             executable, arguments = worker_command(self.root / "request.json")
         self.assertEqual(executable, sys.executable)
         self.assertEqual(arguments, ["--ocr-worker", str(self.root / "request.json")])
+
+    def test_drag_drop_mixed_files_duplicates_and_busy_state(self):
+        from PIL import Image
+        pdf = make_pdf(self.root / "Первый.pdf")
+        png = self.root / "Второй.PNG"
+        jpg = self.root / "Третий.jpeg"
+        for path in (png,jpg):
+            with Image.new("RGB",(100,100),"white") as image:
+                image.save(path)
+        unsupported=self.root/"file.txt"
+        unsupported.write_text("Unsupported")
+        folder=self.root/"directory.png"
+        folder.mkdir()
+        mime=QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(p)) for p in (png,pdf,jpg,png,unsupported,folder)] +
+                     [QUrl("https://example.com/remote.png")])
+        table=self.widget.table
+        self.window.navigation.setCurrentRow(1)
+        QApplication.processEvents()
+        def drop():
+            enter=QDragEnterEvent(QPoint(20,20),Qt.DropAction.CopyAction,mime,
+                                  Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier)
+            QApplication.sendEvent(table.viewport(),enter)
+            event=QDropEvent(QPointF(20,20),Qt.DropAction.CopyAction,mime,
+                             Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier)
+            QApplication.sendEvent(table.viewport(),event)
+            return enter,event
+        enter,event=drop()
+        self.assertTrue(enter.isAccepted())
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(self.widget.files,[png,pdf,jpg])
+        self.assertFalse(table.hint.isVisible())
+        drop()
+        self.assertEqual(len(self.widget.files),3)
+        table.accept_files=False
+        enter,event=drop()
+        self.assertFalse(enter.isAccepted())
+        self.assertFalse(event.isAccepted())
+        table.accept_files=True
+        self.widget._clear_files()
+        self.assertTrue(table.hint.isVisible())
+        self.assertTrue(all(p.exists() for p in (png,pdf,jpg)))
+
+    def test_file_picker_includes_images(self):
+        with patch("ocr_widget.QFileDialog.getOpenFileNames", return_value=([],"")) as picker:
+            self.widget._choose_files()
+        self.assertIn("*.jpg",picker.call_args.args[3])
+        self.assertIn("*.png",picker.call_args.args[3])
 
 
 if __name__ == "__main__":

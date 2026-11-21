@@ -6,6 +6,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from ocr_inputs import IMAGE_DPI, IMAGE_SUFFIXES, inspect_input, open_input
 
 
 @dataclass(frozen=True)
@@ -178,7 +179,7 @@ def export_results(folder: Path, manifest: dict, cancelled=lambda: False):
 
 def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                   cancelled=lambda: False, backend=None) -> dict:
-    """Порядок files сохраняется. Ошибка одного PDF не останавливает пакет.
+    """Порядок files сохраняется. Ошибка одного PDF/изображения не останавливает пакет.
 
     output_dir должна быть новой папкой; это защищает прежние результаты.
     backend можно подменить в тестах, не загружая модель.
@@ -216,15 +217,8 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
         for item in manifest["files"]:
             check_cancel()
             try:
-                with pymupdf.open(item["source"]) as pdf:
-                    if not pdf.is_pdf:
-                        raise ValueError("Файл не является PDF.")
-                    if pdf.needs_pass:
-                        raise ValueError("PDF защищён паролем; сначала сохраните доступную копию.")
-                    item["page_count"] = len(pdf)
-                    if not len(pdf):
-                        raise ValueError("PDF не содержит страниц.")
-                    manifest["pages_total"] += len(pdf)
+                item["page_count"] = inspect_input(item["source"])
+                manifest["pages_total"] += item["page_count"]
             except Exception as exc:
                 item.update(status="error", error=str(exc)[:1200])
                 manifest["errors"] += 1
@@ -239,7 +233,7 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                 continue
             item["status"] = "running"
             try:
-                with pymupdf.open(item["source"]) as pdf:
+                with open_input(item["source"]) as pdf:
                     for number, page in enumerate(pdf, 1):
                         check_cancel()
                         progress("page_started", file=row, page=number, pages=item["page_count"],
@@ -252,7 +246,8 @@ def process_batch(files, output_dir: Path, settings: OcrSettings, on_event=None,
                             if result["method"] == "ocr":
                                 progress("recognizing", file=row, page=number)
                                 # Ограничение размера предотвращает чрезмерный расход RAM на плакатах.
-                                scale = min(settings.dpi / 72, 3500 / max(page.rect.width, page.rect.height))
+                                dpi = IMAGE_DPI if Path(item["source"]).suffix.lower() in IMAGE_SUFFIXES else settings.dpi
+                                scale = min(dpi / 72, 3500 / max(page.rect.width, page.rect.height))
                                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale),
                                                         colorspace=pymupdf.csRGB, alpha=False)
                                 import numpy as np

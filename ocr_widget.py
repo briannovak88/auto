@@ -15,6 +15,59 @@ from PyQt6.QtWidgets import (
 )
 
 
+from ocr_inputs import SUPPORTED_SUFFIXES
+
+
+class FileDropTable(QTableWidget):
+    files_dropped = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__(0, 3)
+        self.accept_files = True
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.hint = QLabel("Перетащите сюда PDF, JPG или PNG\nили нажмите «Добавить файлы»", self.viewport())
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hint.setStyleSheet("color: #6077AA; background: transparent;")
+        self.model().rowsInserted.connect(self._update_hint)
+        self.model().rowsRemoved.connect(self._update_hint)
+
+    def _update_hint(self, *args):
+        self.hint.setVisible(self.rowCount() == 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.hint.setGeometry(self.viewport().rect())
+
+    def _paths(self, event):
+        if not self.accept_files or not event.mimeData().hasUrls():
+            return []
+        return [url.toLocalFile() for url in event.mimeData().urls()
+                if url.isLocalFile() and Path(url.toLocalFile()).suffix.lower() in SUPPORTED_SUFFIXES
+                and Path(url.toLocalFile()).is_file()]
+
+    def dragEnterEvent(self, event):
+        if self._paths(event):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._paths(event)
+        if paths:
+            self.files_dropped.emit(paths)
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+
 def worker_command(request: Path):
     if getattr(sys, "frozen", False):
         return sys.executable, ["--ocr-worker", str(request)]
@@ -47,11 +100,11 @@ class OcrWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
-        notice = QLabel("Локально · русский и английский · текстовый слой или OCR сканов · порядок файлов сохраняется")
+        notice = QLabel("PDF, JPG/JPEG и PNG · добавьте файлы кнопкой или перетащите в список · локально, русский и английский")
         notice.setWordWrap(True)
         root.addWidget(notice)
         controls = QHBoxLayout()
-        self.add_button = QPushButton("＋ Добавить PDF")
+        self.add_button = QPushButton("＋ Добавить файлы")
         self.add_button.clicked.connect(self._choose_files)
         self.remove_button = QPushButton("Убрать выбранные")
         self.remove_button.setObjectName("SecondaryBtn")
@@ -65,8 +118,9 @@ class OcrWidget(QWidget):
         controls.addStretch()
         root.addLayout(controls)
         splitter = QSplitter(Qt.Orientation.Vertical)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["PDF-файл", "Страницы", "Состояние"])
+        self.table = FileDropTable()
+        self.table.files_dropped.connect(self.add_files)
+        self.table.setHorizontalHeaderLabels(["Файл · PDF / JPG / PNG", "Страницы", "Состояние"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(1, 95)
@@ -79,7 +133,7 @@ class OcrWidget(QWidget):
         preview_layout = QVBoxLayout(preview_group)
         self.text_button = QPushButton("Передать в «Текст»")
         self.text_button.setObjectName("SecondaryBtn")
-        self.text_button.setToolTip("Выделенный фрагмент; иначе выбранные PDF в таблице; иначе весь результат. Ничего не отправляется провайдеру.")
+        self.text_button.setToolTip("Выделенный фрагмент; иначе выбранные файлы в таблице; иначе весь результат. Ничего не отправляется провайдеру.")
         self.text_button.clicked.connect(self._send_to_text)
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
@@ -102,10 +156,11 @@ class OcrWidget(QWidget):
         self.dpi.setRange(100, 300)
         self.dpi.setValue(200)
         self.dpi.setSuffix(" DPI")
+        self.dpi.setToolTip("Разрешение отрисовки PDF. Картинки читаются в исходном разрешении, с ограничением длинной стороны 3500 px.")
         row = QHBoxLayout()
         row.addWidget(self.gpu)
         row.addStretch()
-        row.addWidget(QLabel("Качество сканов:"))
+        row.addWidget(QLabel("Разрешение PDF:"))
         row.addWidget(self.dpi)
         grid.addLayout(row, 1, 0, 1, 3)
         self.preserve_layout = QCheckBox("Сохранять таблицы и колонки в DOCX (приближённо)")
@@ -138,7 +193,7 @@ class OcrWidget(QWidget):
         self.progress = QProgressBar()
         self.progress.setValue(0)
         root.addWidget(self.progress)
-        self.status = QLabel("Добавьте PDF-файлы. Базовый режим — CPU.")
+        self.status = QLabel("Добавьте PDF или картинки. Базовый режим — CPU.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         self.edit_controls = [self.add_button, self.remove_button, self.clear_button, settings]
@@ -151,7 +206,7 @@ class OcrWidget(QWidget):
         for filename in filenames:
             path = Path(filename).resolve()
             key = str(path).casefold() if sys.platform == "win32" else str(path)
-            if key in seen or path.suffix.lower() != ".pdf":
+            if key in seen or path.suffix.lower() not in SUPPORTED_SUFFIXES or path.is_dir():
                 continue
             seen.add(key)
             self.files.append(path)
@@ -164,7 +219,8 @@ class OcrWidget(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem("В очереди"))
 
     def _choose_files(self):
-        names, _ = QFileDialog.getOpenFileNames(self, "Выберите PDF в порядке обработки", "", "PDF (*.pdf)")
+        names, _ = QFileDialog.getOpenFileNames(self, "Выберите PDF и изображения", "",
+                                               "Документы и картинки (*.pdf *.jpg *.jpeg *.png);;PDF (*.pdf);;Картинки (*.jpg *.jpeg *.png)")
         self.add_files(names)
 
     def _remove_files(self):
@@ -210,7 +266,7 @@ class OcrWidget(QWidget):
                         item = next((entry for entry in self.result["files"]
                                      if Path(entry["source"]) == source), None)
                         if item is None:
-                            self.status.setText("Один из выбранных PDF ещё не обработан в этом результате. Выберите обработанные файлы.")
+                            self.status.setText("Один из выбранных файлов ещё не обработан в этом результате. Выберите обработанные файлы.")
                             return
                         heading = f"Файл: {item['name']}\n"
                         chunks.append(heading)
@@ -247,7 +303,7 @@ class OcrWidget(QWidget):
         if self.is_running:
             return
         if not self.files:
-            self.status.setText("Сначала добавьте хотя бы один PDF.")
+            self.status.setText("Сначала добавьте PDF, JPG или PNG.")
             return
         if not self.model_dir.text().strip():
             self.status.setText("Укажите папку локальных моделей OCR.")
@@ -274,13 +330,14 @@ class OcrWidget(QWidget):
         self.diagnostics = self.last_error = ""
         self.cancel_requested = False
         self.is_running = True
+        self.table.accept_files = False
         self._result_buttons(False)
         for control in self.edit_controls:
             control.setEnabled(False)
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self.status.setText("Открытие PDF и подсчёт страниц…")
+        self.status.setText("Открытие файлов и подсчёт страниц…")
         for row in range(self.table.rowCount()):
             self.table.item(row, 2).setText("В очереди")
         program, arguments = worker_command(request_path)
@@ -351,6 +408,7 @@ class OcrWidget(QWidget):
         self._read_stdout()
         self._read_stderr()
         self.is_running = False
+        self.table.accept_files = True
         for control in self.edit_controls:
             control.setEnabled(True)
         self.start_button.setEnabled(True)

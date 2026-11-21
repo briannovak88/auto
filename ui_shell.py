@@ -1,5 +1,7 @@
 """Оболочка «Осьминог»: оформление и описание экранов, без обработки файлов."""
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 
 from PyQt6.QtCore import QByteArray, QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
@@ -27,7 +29,7 @@ SECTIONS = (
     Section("documents", "Документы", "Автоматизация документов",
             "Подготовка комплектов документов для регистрации программ ЭВМ", 1),
     Section("recognition", "Распознавание", "Распознавание документов",
-            "Локальное распознавание PDF, извлечение текста и сохранение в общий Word-файл", 2, (
+            "Распознавание PDF, JPG и PNG, извлечение текста и сохранение в Word", 2, (
                 ("Документы и сканы", "Пакетная работа с документами и страницами со сканами."),
                 ("Русский и английский", "Локальное распознавание текста на вашем компьютере."),
                 ("Общий результат", "Текст для копирования и общий Word-файл с границами документов."),
@@ -94,14 +96,22 @@ def section_icon(key: str) -> QIcon:
     return QIcon(glyph_pixmap(key, 64, "#3972FF"))
 
 
+def application_icon(icon_path=None) -> QIcon:
+    """Единый знак приложения, независимый от открытого раздела."""
+    resource_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    path = Path(icon_path) if icon_path else resource_dir / "icon.ico"
+    icon = QIcon(str(path)) if path.is_file() else QIcon()
+    return icon if not icon.isNull() else section_icon("octopus")
+
+
 class HeroBanner(QFrame):
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(124)
+        self.setFixedHeight(72)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(30, 15, 28, 15)
+        layout.setContentsMargins(20, 8, 18, 8)
         text = QVBoxLayout()
-        text.setSpacing(5)
+        text.setSpacing(2)
         text.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.title = QLabel()
         self.title.setObjectName("HeroTitle")
@@ -112,14 +122,14 @@ class HeroBanner(QFrame):
         text.addWidget(self.subtitle)
         layout.addLayout(text, 1)
         self.art = QLabel()
-        self.art.setFixedSize(88, 88)
+        self.art.setFixedSize(48, 48)
         self.art.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.art)
 
     def set_section(self, section: Section):
         self.title.setText(section.title)
         self.subtitle.setText(section.subtitle)
-        self.art.setPixmap(glyph_pixmap(section.key, 74))
+        self.art.setPixmap(glyph_pixmap(section.key, 42))
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -153,12 +163,14 @@ class Sidebar(QFrame):
         self.setObjectName("Sidebar")
         self.setFixedWidth(220)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 23, 12, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(8)
         self.avatar = QLabel()
         self.avatar.setObjectName("SectionAvatar")
-        self.avatar.setFixedSize(72, 72)
+        self.avatar.setFixedSize(56, 56)
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.avatar.setPixmap(application_icon().pixmap(48, 48))
+        self.avatar.setAccessibleName("Осьминог — значок приложения")
         layout.addWidget(self.avatar, alignment=Qt.AlignmentFlag.AlignHCenter)
         brand = QLabel(APP_NAME)
         brand.setObjectName("BrandTitle")
@@ -172,7 +184,7 @@ class Sidebar(QFrame):
         self.caption.setObjectName("SidebarCaption")
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.caption.setWordWrap(True)
-        self.caption.setMinimumHeight(44)
+        self.caption.setMinimumHeight(36)
         layout.addWidget(self.caption)
         self.navigation = QListWidget()
         self.navigation.setObjectName("Navigation")
@@ -190,8 +202,6 @@ class Sidebar(QFrame):
         layout.addWidget(footer)
 
     def set_section(self, section: Section):
-        self.avatar.setPixmap(glyph_pixmap(section.key, 45))
-        self.avatar.setAccessibleName(section.caption)
         self.caption.setText(section.caption)
 
 
@@ -206,14 +216,14 @@ class PlannedSection(QScrollArea):
         self.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(5, 8, 5, 5)
-        layout.setSpacing(18)
+        layout.setSpacing(10)
         card = QFrame()
         card.setObjectName("PreviewCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(36, 30, 36, 30)
-        card_layout.setSpacing(16)
+        card_layout.setContentsMargins(22, 16, 22, 16)
+        card_layout.setSpacing(8)
         icon = QLabel()
-        icon.setPixmap(glyph_pixmap(section.key, 64, "#3972FF"))
+        icon.setPixmap(glyph_pixmap(section.key, 40, "#3972FF"))
         card_layout.addWidget(icon)
         badge = QLabel(f"ЭТАП {section.stage} · ЗАПЛАНИРОВАНО")
         badge.setObjectName("PreviewBadge")
@@ -235,7 +245,7 @@ class PlannedSection(QScrollArea):
             feature = QFrame()
             feature.setObjectName("FeatureCard")
             row = QHBoxLayout(feature)
-            row.setContentsMargins(22, 18, 22, 18)
+            row.setContentsMargins(18, 12, 18, 12)
             number_label = QLabel(f"0{number}")
             number_label.setObjectName("FeatureNumber")
             number_label.setFixedWidth(48)
@@ -288,38 +298,38 @@ QLabel#BrandEnglish { color: #B4C9FF; font-size: 10px; font-weight: 600; }
 QLabel#SidebarCaption { color: #D7E4FF; font-size: 13px; }
 QLabel#SidebarFooter { color: #CCDBFF; border-top: 1px solid #5268AB; padding: 16px 4px 0; font-size: 11px; }
 QListWidget#Navigation { background: transparent; border: none; outline: none; color: #EFF5FF; }
-QListWidget#Navigation::item { padding: 13px 9px; margin: 3px 0; border: 1px solid transparent; border-radius: 11px; }
+QListWidget#Navigation::item { padding: 10px 9px; margin: 3px 0; border: 1px solid transparent; border-radius: 11px; }
 QListWidget#Navigation::item:hover { background: #2D52A6; }
 QListWidget#Navigation::item:selected {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #4999FF,stop:1 #2865F6);
     border: 1px solid #96C5FF; color: white;
 }
-QLabel#HeroTitle { color: white; font-size: 32px; font-weight: 700; }
-QLabel#HeroSubtitle { color: #EFF6FF; font-size: 15px; }
+QLabel#HeroTitle { color: white; font-size: 24px; font-weight: 700; }
+QLabel#HeroSubtitle { color: #EFF6FF; font-size: 13px; }
 QFrame#DatabaseBar { background: #E7EDFF; border: 1px solid #FAFCFF; border-radius: 13px; }
 QLabel#DatabaseStatus { background: #DCF5EA; color: #19844F; padding: 8px 14px; border: 1px solid #ECFFF3; border-radius: 10px; font-weight: 600; }
 QTabWidget::pane { border: none; background: transparent; }
-QTabBar::tab { background: #DCE3FF; color: #273B71; border: 1px solid #F7FAFF; border-radius: 11px; padding: 12px 20px; margin: 3px 8px 9px 0; font-weight: 600; }
+QTabBar::tab { background: #DCE3FF; color: #273B71; border: 1px solid #F7FAFF; border-radius: 11px; padding: 8px 16px; margin: 3px 8px 5px 0; font-weight: 600; }
 QTabBar::tab:selected { background: #FAFCFF; color: #2058EE; border-bottom: 3px solid #3B6DFF; }
 QTabBar::tab:hover:!selected { background: #EAF0FF; }
-QGroupBox { background: #EAF0FF; border: 1px solid #FFFFFF; border-radius: 17px; margin-top: 18px; padding: 18px 12px 12px; font-weight: 600; }
+QGroupBox { background: #EAF0FF; border: 1px solid #FFFFFF; border-radius: 14px; margin-top: 14px; padding: 12px 10px 8px; font-weight: 600; }
 QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 18px; padding: 0 7px; color: #1C3278; }
 QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QDateEdit {
-    background: #F8FAFF; color: #182B59; border: 1px solid #BDCDF5; border-radius: 8px; padding: 6px 9px;
+    background: #F8FAFF; color: #182B59; border: 1px solid #BDCDF5; border-radius: 8px; padding: 4px 8px;
     selection-background-color: #3E73F7; selection-color: white;
 }
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus { border: 1px solid #5186FA; background: white; }
 QLineEdit:read-only { background: #E4EBFF; }
 QTableWidget, QListWidget { background: #F6F8FF; alternate-background-color: #EBF0FF; border: 1px solid #C4D1F4; border-radius: 11px; gridline-color: #D7E1FC; selection-background-color: #CCDDFF; selection-color: #172653; outline: none; }
 QHeaderView::section { background: #E0E8FF; border: none; border-right: 1px solid #D0DCFA; border-bottom: 1px solid #C9D6F8; padding: 10px 6px; color: #273965; font-weight: 600; }
-QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #368BFF,stop:1 #2554EE); border: 1px solid #8AB7FF; border-radius: 9px; color: white; padding: 8px 12px; font-weight: 600; }
+QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #368BFF,stop:1 #2554EE); border: 1px solid #8AB7FF; border-radius: 9px; color: white; padding: 6px 10px; font-weight: 600; }
 QPushButton:hover { background: #3277FF; border: 1px solid #B7D8FF; }
 QPushButton:pressed { background: #214ED9; }
 QPushButton#SecondaryBtn { background: #F1F5FF; color: #254BA5; border: 1px solid #C1D1F7; }
 QPushButton#SecondaryBtn:hover { background: #E2EBFF; border: 1px solid #8FB0F5; }
 QPushButton#DangerBtn { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #FF7595,stop:1 #EF3C66); border: 1px solid #FFB9CA; }
 QPushButton#DangerBtn:hover { background: #ED3C68; }
-QPushButton#SuccessBtn { font-size: 14px; padding: 12px 20px; border-radius: 12px; }
+QPushButton#SuccessBtn { font-size: 14px; padding: 8px 16px; border-radius: 10px; }
 QPushButton:disabled { background: #D8E0F3; color: #8D9CBE; border-color: #D8E0F3; }
 QProgressBar { border: 1px solid #C0D0F7; border-radius: 7px; background: #F4F7FF; text-align: center; min-height: 22px; }
 QProgressBar::chunk { background: #5586FC; border-radius: 6px; }
@@ -328,7 +338,7 @@ QScrollArea { border: none; background: transparent; }
 QWidget#PlannedContent { background: transparent; }
 QFrame#PreviewCard, QFrame#FeatureCard { background: #F3F6FF; border: 1px solid white; border-radius: 17px; }
 QLabel#PreviewBadge { color: #4E73D7; font-size: 11px; font-weight: 700; }
-QLabel#PreviewTitle { color: #1D367A; font-size: 25px; font-weight: 700; }
+QLabel#PreviewTitle { color: #1D367A; font-size: 21px; font-weight: 700; }
 QLabel#PreviewNotice { color: #5E709C; font-size: 14px; }
 QLabel#FeatureNumber { color: #6A8DE6; font-size: 25px; font-weight: 600; }
 QLabel#FeatureTitle { color: #233E7D; font-size: 15px; font-weight: 600; }
