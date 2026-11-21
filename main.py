@@ -60,6 +60,7 @@ from ui_shell import (
     PlannedSection, Sidebar, section_icon,
 )
 from ocr_widget import OcrWidget
+from text_widget import TextWidget
 
 
 
@@ -1237,12 +1238,16 @@ class AutomatDocsWindow(QMainWindow):
         self.stack.addWidget(self.documents)
         self.ocr = OcrWidget(app_paths)
         self.stack.addWidget(self.ocr)
-        for section in SECTIONS[2:]:
+        self.text = TextWidget(app_paths)
+        self.stack.addWidget(self.text)
+        self.ocr.text_requested.connect(self._receive_ocr_text)
+        for section in SECTIONS[3:]:
             self.stack.addWidget(PlannedSection(section))
         self.navigation.currentRowChanged.connect(self._on_section_changed)
         self.navigation.setCurrentRow(0)
         self.documents.generation_stopped.connect(self._on_generation_stopped)
         self.ocr.stopped.connect(self._on_generation_stopped)
+        self.text.stopped.connect(self._on_generation_stopped)
         workspace.addWidget(self.stack, stretch=1)
         layout.addLayout(workspace, stretch=1)
 
@@ -1256,13 +1261,18 @@ class AutomatDocsWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} (Octopus) — {section.caption}")
         self.setWindowIcon(section_icon(section.key))
 
+    def _receive_ocr_text(self, text):
+        self.navigation.setCurrentRow(2)
+        self.text.receive_ocr(text)
+
     def closeEvent(self, event):
-        if self.documents.worker is not None or self.ocr.is_running:
+        if self.documents.worker is not None or self.ocr.is_running or self.text.is_running:
             if not self._close_when_finished:
                 answer = QMessageBox.question(
                     self, "Выполняется обработка",
-                    ("Отменить OCR, сохранить неполный результат и закрыть окно после завершения фоновых задач?"
-                     if self.ocr.is_running else "Документы ещё создаются. Дождаться завершения и закрыть окно?"),
+                    "Отменить активные запросы текста и OCR, дождаться сохранения результатов OCR "
+                    "и завершения генерации документов, затем закрыть окно? "
+                    "Отмена не отзывает уже отправленный провайдеру текст.",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
                 )
@@ -1270,9 +1280,10 @@ class AutomatDocsWindow(QMainWindow):
                     self._close_when_finished = True
                     self.documents.suppress_notifications = True
                     self.ocr.cancel()
+                    self.text.cancel()
                     self.documents.lbl_status.setText("Окно закроется после завершения генерации…")
             # Вложенный цикл диалога мог уже обработать QThread.finished.
-            if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running:
+            if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running and not self.text.is_running:
                 event.accept()
                 return
             event.ignore()
@@ -1280,7 +1291,7 @@ class AutomatDocsWindow(QMainWindow):
         event.accept()
 
     def _on_generation_stopped(self):
-        if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running:
+        if self._close_when_finished and self.documents.worker is None and not self.ocr.is_running and not self.text.is_running:
             QTimer.singleShot(0, self.close)
 
 

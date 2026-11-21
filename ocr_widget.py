@@ -23,6 +23,7 @@ def worker_command(request: Path):
 
 class OcrWidget(QWidget):
     stopped = pyqtSignal()
+    text_requested = pyqtSignal(str)
 
     def __init__(self, paths, parent=None):
         super().__init__(parent)
@@ -76,6 +77,10 @@ class OcrWidget(QWidget):
         splitter.addWidget(self.table)
         preview_group = QGroupBox("Общий текст результата")
         preview_layout = QVBoxLayout(preview_group)
+        self.text_button = QPushButton("Передать в «Текст»")
+        self.text_button.setObjectName("SecondaryBtn")
+        self.text_button.setToolTip("Выделенный фрагмент; иначе выбранные PDF в таблице; иначе весь результат. Ничего не отправляется провайдеру.")
+        self.text_button.clicked.connect(self._send_to_text)
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
         self.preview.setPlaceholderText("После обработки здесь появится текст с границами файлов и страниц.")
@@ -127,7 +132,7 @@ class OcrWidget(QWidget):
         self.folder_button = QPushButton("Папка результата")
         self.folder_button.setObjectName("SecondaryBtn")
         self.folder_button.clicked.connect(self._open_result)
-        for button in (self.start_button, self.cancel_button, self.copy_button, self.save_button, self.folder_button):
+        for button in (self.start_button, self.cancel_button, self.copy_button, self.text_button, self.save_button, self.folder_button):
             action_row.addWidget(button)
         root.addLayout(action_row)
         self.progress = QProgressBar()
@@ -182,6 +187,61 @@ class OcrWidget(QWidget):
         self.copy_button.setEnabled(ready)
         self.save_button.setEnabled(ready)
         self.folder_button.setEnabled(ready)
+        self.text_button.setEnabled(ready)
+
+    def _send_to_text(self):
+        from text_engine import MAX_SOURCE
+        if self.is_running or not self.result:
+            return
+        selected = self.preview.textCursor().selectedText().replace("\u2029", "\n")
+        try:
+            if selected:
+                text = selected
+            else:
+                rows = sorted({index.row() for index in self.table.selectedIndexes()})
+                folder = self.run_dir / "result"
+                if rows:
+                    chunks = []
+                    size = 0
+                    for row in rows:
+                        # Список PDF можно изменить после обработки. Связываем
+                        # результат с путём, а не с прежним номером строки.
+                        source = self.files[row]
+                        item = next((entry for entry in self.result["files"]
+                                     if Path(entry["source"]) == source), None)
+                        if item is None:
+                            self.status.setText("Один из выбранных PDF ещё не обработан в этом результате. Выберите обработанные файлы.")
+                            return
+                        heading = f"Файл: {item['name']}\n"
+                        chunks.append(heading)
+                        size += len(heading)
+                        for page in item["pages"]:
+                            if page.get("text_file"):
+                                with (folder / page["text_file"]).open(encoding="utf-8") as stream:
+                                    content = stream.read(MAX_SOURCE + 1)
+                            else:
+                                content = "[Страница не распознана]"
+                            part = f"Страница {page['number']}\n{content}\n"
+                            chunks.append(part)
+                            size += len(part)
+                            if size > MAX_SOURCE:
+                                break
+                        if size > MAX_SOURCE:
+                            break
+                    text = "\n".join(chunks)
+                else:
+                    with (folder / self.result["text_path"]).open(encoding="utf-8") as stream:
+                        text = stream.read(MAX_SOURCE + 1)
+            if len(text) > MAX_SOURCE:
+                self.status.setText(f"Выделите в предпросмотре фрагмент до {MAX_SOURCE} символов. Большой текст не обрезается и не передаётся.")
+                return
+            if not text.strip():
+                self.status.setText("В выбранном результате нет текста для передачи.")
+                return
+        except (OSError, KeyError, IndexError, UnicodeError):
+            self.status.setText("Не удалось прочитать выбранный результат OCR.")
+            return
+        self.text_requested.emit(text)
 
     def start(self):
         if self.is_running:
@@ -328,6 +388,7 @@ class OcrWidget(QWidget):
                 self.preview.setPlainText(preview + ("\n[Предпросмотр сокращён; копирование и DOCX содержат полный текст.]" if truncated else ""))
             self._result_buttons(bool(self.result.get("docx_path")))
             self.copy_button.setEnabled(bool(self.result.get("text_path")))
+            self.text_button.setEnabled(bool(self.result.get("text_path")))
             self.folder_button.setEnabled(True)
             self.progress.setValue(100 if self.result["status"] == "completed" else
                                    round(100 * self.result["pages_done"] / max(1, self.result["pages_total"])))

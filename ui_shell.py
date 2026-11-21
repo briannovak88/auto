@@ -184,7 +184,7 @@ class Sidebar(QFrame):
             item.setToolTip(section.caption)
             self.navigation.addItem(item)
         layout.addWidget(self.navigation, 1)
-        footer = QLabel("Локальное приложение\nДанные на вашем компьютере")
+        footer = QLabel("Локальные инструменты\nОблако — с подтверждением")
         footer.setObjectName("SidebarFooter")
         footer.setWordWrap(True)
         layout.addWidget(footer)
