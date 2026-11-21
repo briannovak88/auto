@@ -53,11 +53,25 @@ class TextSettingsTests(unittest.TestCase):
         source = "Документ с числами: 125,50.\n\nВторой абзац."
         for mode, instruction in (("translate", ""), ("write", "Отредактируй стиль")):
             messages = build_messages(TextRequest(mode, source, instruction, "Английский"))
-            self.assertEqual(json.loads(messages[1]["content"])["source"], source)
+            self.assertIn("<source_text>\n" + source + "\n</source_text>", messages[1]["content"])
+            self.assertIn("Язык результата: Английский", messages[0]["content"])
         for request in (TextRequest("write"), TextRequest("translate"),
                         TextRequest("translate", "x" * (MAX_SOURCE + 1))):
             with self.assertRaises(TextError):
                 build_messages(request)
+
+    def test_writing_task_is_a_direct_instruction_without_empty_json_fields(self):
+        instruction = "Напиши небольшой тест на знание python\n\n"
+        messages = build_messages(TextRequest("write", instruction=instruction))
+        self.assertEqual(messages[1]["content"], instruction.strip())
+        self.assertIn("Язык результата: Русский", messages[0]["content"])
+        self.assertNotIn('"source"', messages[1]["content"])
+        self.assertNotIn('"output_language"', messages[1]["content"])
+        # JSON внутри пользовательского материала остаётся дословным содержимым.
+        source = '{"name": "Python", "version": 3}\n'
+        messages = build_messages(TextRequest("translate", source, "Не переводи ключи JSON", "Английский"))
+        self.assertIn(source, messages[1]["content"])
+        self.assertIn("Не переводи ключи JSON", messages[1]["content"])
 
 
 @unittest.skipUnless(HAS_HTTPX, "Установите requirements-text.txt")
@@ -77,7 +91,7 @@ class TextProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("authorization", calls[0].headers)
         payload = json.loads(calls[0].content)
         self.assertFalse(payload["stream"])
-        self.assertEqual(json.loads(payload["messages"][1]["content"])["source"], "Привет, мир!")
+        self.assertIn("<source_text>\nПривет, мир!\n</source_text>", payload["messages"][1]["content"])
 
     async def test_cloud_requires_consent_and_key_before_any_connection(self):
         calls = []
@@ -160,6 +174,51 @@ class TextProviderTests(unittest.IsolatedAsyncioTestCase):
                                     "message": {"content": "Incomplete translation"}, "done": True, "done_reason": "length"})))
         self.assertIn("неполным", result.warning)
         self.assertTrue(result.text)
+
+    async def test_service_json_echo_is_rejected_for_local_and_cloud_without_retry(self):
+        request = TextRequest("write", instruction="Напиши небольшой тест на знание python\n\n")
+        legacy = {"output_language": "Русский", "task": request.instruction, "source": ""}
+        echoes = [json.dumps(legacy, ensure_ascii=False, indent=2),
+                  "```json\n" + json.dumps(legacy) + "\n```",
+                  json.dumps(build_messages(request)),
+                  json.dumps(build_messages(request)[-1])]
+        for provider in ("ollama", "cloud"):
+            for echo in echoes:
+                calls = []
+                def handler(http_request):
+                    calls.append(http_request)
+                    response = ({"message": {"content": echo}, "done": True} if provider == "ollama" else
+                                {"choices": [{"message": {"content": echo}, "finish_reason": "stop"}]})
+                    return httpx.Response(200, json=response)
+                with self.subTest(provider=provider, echo=echo), patch.dict(os.environ, {API_KEY_ENV: "synthetic-key"}):
+                    with self.assertRaisesRegex(TextError, "повторила служебный запрос"):
+                        await generate(request, replace(TextSettings(), provider=provider), cloud_consent=True,
+                                       transport=httpx.MockTransport(handler))
+                    self.assertEqual(len(calls), 1)
+
+    async def test_request_wrapper_echo_does_not_replace_result(self):
+        for mode in ("write", "translate"):
+            request = TextRequest(mode, source="Материал для работы", instruction="Отредактируй текст")
+            echoed = build_messages(request)[1]["content"]
+            with self.subTest(mode=mode), self.assertRaisesRegex(TextError, "повторила служебный запрос"):
+                await generate(request, TextSettings(), transport=httpx.MockTransport(
+                    lambda r: httpx.Response(200, json={"message": {"content": echoed}, "done": True})))
+
+    async def test_useful_json_quiz_and_unchanged_source_are_accepted(self):
+        quiz = "1. Какой тип имеет значение True?\n2. Что делает len()?\nОтветы: bool; возвращает длину."
+        cases = [
+            (TextRequest("write", instruction="Напиши тест по Python"), quiz),
+            (TextRequest("write", instruction="Напиши тест в JSON"), '{"questions": ["Что делает len()?"]}'),
+            (TextRequest("write", instruction="Верни пример JSON"),
+             '{"output_language": "English", "task": "Example", "source": "Data"}'),
+            (TextRequest("translate", source="Python 3.12", language="Русский"), "Python 3.12"),
+            (TextRequest("write", source="Текст уже верен.", instruction="Исправь ошибки"), "Текст уже верен."),
+        ]
+        for request, content in cases:
+            with self.subTest(request=request):
+                result = await generate(request, TextSettings(), transport=httpx.MockTransport(
+                    lambda r: httpx.Response(200, json={"message": {"content": content}, "done": True})))
+                self.assertEqual(result.text, content)
 
     async def test_real_loopback_http_server_and_proxy_bypass(self):
         recorded = []

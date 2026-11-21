@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 import tempfile
 import threading
@@ -16,7 +17,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QPlainTextEdit
 from app_paths import resolve_paths
 from main import AutomatDocsWindow
 from tests.test_gui import wait_until
-from text_engine import API_KEY_ENV, MAX_SOURCE, TextRequest, TextSettings, generate
+from text_engine import API_KEY_ENV, MAX_SOURCE, TextRequest, TextSettings, build_messages, generate
 from text_widget import CloudConsentDialog, TextWorker
 
 HAS_HTTPX = importlib.util.find_spec("httpx") is not None
@@ -116,6 +117,32 @@ class TextGuiTests(unittest.TestCase):
             self.assertEqual(confirm.call_args.args[0].source, "Текст только выбранного документа")
         self.assertEqual(len(calls), 2)
         self.assertEqual(self.widget.output.toPlainText(), "Translation")
+        expected = build_messages(TextRequest("translate", "Текст только выбранного документа", "Сохрани термины"))
+        self.assertEqual(json.loads(calls[0].content)["messages"], expected)
+
+    def test_echo_keeps_previous_result_and_direct_writing_can_be_retried(self):
+        instruction = "Напиши небольшой тест на знание python\n\n"
+        self.widget.instruction.setPlainText(instruction)
+        self.widget.output.setPlainText("Предыдущее поздравление с днём рождения")
+        echoed = json.dumps({"output_language": "Русский", "task": instruction, "source": ""}, ensure_ascii=False)
+        with self.mock_provider(lambda r: httpx.Response(200, json={"message": {"content": echoed}, "done": True})):
+            self.widget.start()
+            wait_until(lambda: not self.widget.is_running)
+        self.assertIn("повторила служебный запрос", self.widget.status.text())
+        self.assertEqual(self.widget.output.toPlainText(), "Предыдущее поздравление с днём рождения")
+        self.assertEqual(self.widget.instruction.toPlainText(), instruction)
+        self.assertEqual(self.widget.source.toPlainText(), "")
+        self.assertTrue(self.widget.start_button.isEnabled())
+        calls = []
+        def handler(request):
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={"message": {"content": "1. Что делает функция print()?"}, "done": True})
+        with self.mock_provider(handler):
+            self.widget.start()
+            wait_until(lambda: not self.widget.is_running)
+        self.assertEqual(calls[0]["messages"][1]["content"], instruction.strip())
+        self.assertEqual(self.widget.output.toPlainText(), "1. Что делает функция print()?")
+        self.assertEqual(self.widget.progress.value(), 100)
 
     def test_failure_timeout_and_cancel_preserve_editors_and_allow_retry(self):
         self.widget.mode.setCurrentIndex(1)
