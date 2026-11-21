@@ -1,0 +1,6 @@
+PyQt6>=6.7,<7
+python-docx>=1.1,<2
+docxtpl>=0.20,<0.21
+openpyxl>=3.1,<4
+pypdf>=5,<7
+pywin32>=306; sys_platform == "win32"
